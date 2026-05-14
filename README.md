@@ -12,6 +12,16 @@ uv run pytest                              # all tests
 uv run cubli-mpc sim --config configs/default.yaml --viewer
 ```
 
+### Recording video (headless)
+
+```bash
+uv run cubli-mpc sim --config configs/default.yaml --duration 10 --video sim.mp4
+```
+
+On a headless server, MuJoCo's renderer uses EGL by default; the CLI sets
+`MUJOCO_GL=egl` automatically when `--video` is requested. If you see
+OpenGL errors, your machine may need `MUJOCO_GL=osmesa` instead.
+
 ## Project structure
 
 - `src/cubli_mpc/config.py` — `HardwareConfig`, `SimConfig`, derived quantities, YAML loader.

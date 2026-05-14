@@ -10,11 +10,13 @@ dependencies = [
     "scipy>=1.11",
     "matplotlib>=3.8",
     "pyyaml>=6.0",
+    "imageio[ffmpeg]>=2.34",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4",
+    "imageio[pyav]>=2.34",
 ]
 
 [project.scripts]
