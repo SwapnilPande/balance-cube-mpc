@@ -1499,7 +1499,313 @@ git commit -m "feat(cli): cubli-mpc sim with --viewer; README usage"
 
 ---
 
-## Task 10: Full test suite + final commit
+## Task 10: Headless video recording
+
+**Files:**
+- Modify: `pyproject.toml` (add `imageio[ffmpeg]` dependency)
+- Create: `src/cubli_mpc/sim/recorder.py`
+- Modify: `src/cubli_mpc/cli.py` (add `--video PATH` flag and recorder branch)
+- Create: `tests/test_recorder.py`
+
+**Design notes:**
+- `VideoRecorder` wraps `mujoco.Renderer` + an `imageio` writer; streams frames to disk so memory stays bounded regardless of sim length.
+- Use as a context manager (`with VideoRecorder(...) as rec:`) so the mp4 finalizes even on exceptions.
+- The CLI gains a third execution path alongside `--viewer`: `--video PATH` runs headless and writes mp4.
+- Frame capture rate is configurable but defaults to 30 fps; we capture once every `round((1/fps)/dt_control)` control ticks.
+- On headless Linux servers, MuJoCo's renderer needs an OpenGL backend. The Python `mujoco` package ships with EGL support; the `MUJOCO_GL=egl` env var may be required. Document this in the README.
+
+- [ ] **Step 1: Add `imageio[ffmpeg]` dependency**
+
+Edit `pyproject.toml` to add `"imageio[ffmpeg]>=2.34"` to `dependencies`. The dependencies list should become:
+
+```toml
+dependencies = [
+    "mujoco>=3.0",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "pyyaml>=6.0",
+    "imageio[ffmpeg]>=2.34",
+]
+```
+
+Run: `uv sync --extra dev`
+Expected: `imageio` + `imageio-ffmpeg` install successfully.
+
+- [ ] **Step 2: Write failing tests**
+
+Create `tests/test_recorder.py`:
+
+```python
+"""Tests for headless video recording."""
+import math
+from pathlib import Path
+
+import imageio.v3 as iio
+import pytest
+
+from cubli_mpc.config import HardwareConfig, SimConfig
+from cubli_mpc.sim.env import CubliEnv
+from cubli_mpc.sim.recorder import VideoRecorder
+
+
+def _make_hw() -> HardwareConfig:
+    return HardwareConfig(
+        cube_side_length_m=0.10,
+        cube_mass_kg=0.40,
+        wheel_mass_kg=0.10,
+        wheel_radius_m=0.035,
+        wheel_thickness_m=0.010,
+        motor_max_torque_nm=0.20,
+        motor_max_speed_rad_s=600.0,
+        motor_torque_constant=0.01,
+        edge_bearing_damping=1e-4,
+        wheel_bearing_damping=1e-5,
+    )
+
+
+def test_recorder_writes_mp4(tmp_path: Path):
+    env = CubliEnv(_make_hw(), SimConfig())
+    env.reset(theta0=0.05)
+    out = tmp_path / "out.mp4"
+    with VideoRecorder(env.model, out, fps=30, width=320, height=240) as rec:
+        for _ in range(10):
+            for _ in range(10):  # 10 ms per "frame" at dt=1ms
+                env.step()
+            rec.capture(env.data)
+    assert out.exists()
+    assert out.stat().st_size > 0
+
+
+def test_recorder_video_is_readable(tmp_path: Path):
+    env = CubliEnv(_make_hw(), SimConfig())
+    env.reset(theta0=math.radians(5.0))
+    out = tmp_path / "readable.mp4"
+    n_frames = 15
+    with VideoRecorder(env.model, out, fps=30, width=320, height=240) as rec:
+        for _ in range(n_frames):
+            for _ in range(10):
+                env.step()
+            rec.capture(env.data)
+    # Round-trip through imageio: confirms it's a real, valid mp4 file
+    frames = iio.imread(out, plugin="pyav")
+    assert frames.shape[0] >= n_frames - 2  # ffmpeg may drop a tail frame
+    assert frames.shape[1] == 240
+    assert frames.shape[2] == 320
+    assert frames.shape[3] == 3
+
+
+def test_recorder_context_manager_closes_on_exception(tmp_path: Path):
+    """Even when the body of the with-block raises, the mp4 should still be
+    finalized so partial recordings are recoverable.
+    """
+    env = CubliEnv(_make_hw(), SimConfig())
+    env.reset()
+    out = tmp_path / "partial.mp4"
+    with pytest.raises(RuntimeError):
+        with VideoRecorder(env.model, out, fps=30, width=320, height=240) as rec:
+            for _ in range(5):
+                for _ in range(10):
+                    env.step()
+                rec.capture(env.data)
+            raise RuntimeError("simulated crash")
+    assert out.exists()
+    assert out.stat().st_size > 0
+```
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_recorder.py -v`
+Expected: `ImportError: cannot import name 'VideoRecorder'`.
+
+- [ ] **Step 4: Implement `VideoRecorder`**
+
+Create `src/cubli_mpc/sim/recorder.py`:
+
+```python
+"""Headless video recording for cubli simulations.
+
+Wraps `mujoco.Renderer` (offscreen renderer) and `imageio`'s ffmpeg writer
+to stream frames to an mp4 file. Designed as a context manager so the
+output file is always finalized, even on exceptions in the recording loop.
+
+Headless notes:
+  - On a server without a display, set `MUJOCO_GL=egl` before importing
+    mujoco. The mujoco wheel ships with EGL support on Linux.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import imageio.v2 as iio
+import mujoco
+
+
+class VideoRecorder:
+    def __init__(
+        self,
+        model: mujoco.MjModel,
+        output_path: str | Path,
+        fps: int = 30,
+        width: int = 640,
+        height: int = 480,
+    ):
+        self._renderer = mujoco.Renderer(model, height=height, width=width)
+        self._writer = iio.get_writer(
+            str(output_path),
+            fps=fps,
+            codec="libx264",
+            quality=8,
+            macro_block_size=1,  # allow odd width/height
+        )
+        self._fps = fps
+        self._closed = False
+
+    def capture(self, data: Any) -> None:
+        """Render the current MuJoCo state and append it as one video frame."""
+        self._renderer.update_scene(data)
+        frame = self._renderer.render()
+        self._writer.append_data(frame)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        try:
+            self._writer.close()
+        finally:
+            self._renderer.close()
+            self._closed = True
+
+    def __enter__(self) -> "VideoRecorder":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+```
+
+- [ ] **Step 5: Run recorder tests to verify they pass**
+
+Run: `uv run pytest tests/test_recorder.py -v`
+Expected: all 3 tests pass.
+
+If they fail with `mujoco.FatalError: gladLoadGL error` or similar GL errors, prepend the env var:
+
+```bash
+MUJOCO_GL=egl uv run pytest tests/test_recorder.py -v
+```
+
+If that works, the renderer needs EGL on this machine — document it in the README usage section and have the CLI auto-set the env var when `--video` is used (see step 6).
+
+- [ ] **Step 6: Wire `--video` into the CLI**
+
+In `src/cubli_mpc/cli.py`, add:
+
+1. At the top, before importing mujoco indirectly:
+
+```python
+import os
+# If running headless and rendering, default to EGL backend. This is set
+# before any mujoco import so it takes effect for the renderer.
+os.environ.setdefault("MUJOCO_GL", "egl")
+```
+
+2. Add an argparse argument under the `sim` subparser:
+
+```python
+    p_sim.add_argument("--video", type=Path, default=None,
+                       help="Write an mp4 of the simulation to this path "
+                            "(runs headless, no viewer)")
+    p_sim.add_argument("--video-fps", type=int, default=30)
+    p_sim.add_argument("--video-width", type=int, default=640)
+    p_sim.add_argument("--video-height", type=int, default=480)
+```
+
+3. Add a recorder-branch dispatcher in `_cmd_sim`, choosing between three modes (viewer, video, headless):
+
+Replace the body of `_cmd_sim`'s mode-selection (the lines following controller construction) with:
+
+```python
+    if args.viewer and args.video:
+        print("error: --viewer and --video are mutually exclusive",
+              file=sys.stderr)
+        return 2
+    if args.viewer:
+        return _run_with_viewer(env, controller, sim, args.duration)
+    if args.video:
+        return _run_with_recorder(env, controller, sim, args.duration,
+                                  args.video, args.video_fps,
+                                  args.video_width, args.video_height)
+    return _run_headless(env, controller, sim, args.duration)
+```
+
+4. Add the `_run_with_recorder` function:
+
+```python
+def _run_with_recorder(env, controller, sim, duration: float,
+                       video_path: Path, fps: int,
+                       width: int, height: int) -> int:
+    from cubli_mpc.sim.recorder import VideoRecorder
+
+    steps_per_control = max(1, round(sim.dt_control / sim.dt_sim))
+    n_ticks = int(round(duration / sim.dt_control))
+    capture_every = max(1, round((1.0 / fps) / sim.dt_control))
+
+    with VideoRecorder(env.model, video_path, fps=fps,
+                       width=width, height=height) as rec:
+        for i in range(n_ticks):
+            x = env.state()
+            tau = float(controller.step(x, env.time))
+            env.apply_torque(tau)
+            for _ in range(steps_per_control):
+                env.step()
+            if i % capture_every == 0:
+                rec.capture(env.data)
+    print(f"wrote {video_path} ({n_ticks // capture_every} frames)")
+    return 0
+```
+
+- [ ] **Step 7: Smoke-test the CLI video recording**
+
+Run from `/home/swapnil/efr/cubli-mpc`:
+```bash
+uv run cubli-mpc sim --config configs/default.yaml --duration 3.0 --video /tmp/cubli_test.mp4
+```
+Expected: prints `wrote /tmp/cubli_test.mp4 (90 frames)` (3 s × 30 fps). The file exists and plays in any standard video player.
+
+Verify file:
+```bash
+ls -l /tmp/cubli_test.mp4
+```
+Should be non-zero size, typically tens of KB to a few MB depending on duration.
+
+- [ ] **Step 8: Update README with video usage**
+
+Add this subsection to `README.md` under "Quick start":
+
+```markdown
+### Recording video (headless)
+
+```bash
+uv run cubli-mpc sim --config configs/default.yaml --duration 10 --video sim.mp4
+```
+
+On a headless server, MuJoCo's renderer uses EGL by default; the CLI sets
+`MUJOCO_GL=egl` automatically when `--video` is requested. If you see
+OpenGL errors, your machine may need `MUJOCO_GL=osmesa` instead.
+```
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add pyproject.toml uv.lock src/cubli_mpc/sim/recorder.py \
+    src/cubli_mpc/cli.py tests/test_recorder.py README.md
+git commit -m "feat(sim): headless video recording via imageio + mujoco.Renderer"
+```
+
+---
+
+## Task 11: Full test suite + final commit
 
 - [ ] **Step 1: Run the full suite**
 
