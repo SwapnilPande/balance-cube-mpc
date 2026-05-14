@@ -27,13 +27,17 @@ class VideoRecorder:
         height: int = 480,
     ):
         self._renderer = mujoco.Renderer(model, height=height, width=width)
-        self._writer = iio.get_writer(
-            str(output_path),
-            fps=fps,
-            codec="libx264",
-            quality=8,
-            macro_block_size=1,  # allow odd width/height
-        )
+        try:
+            self._writer = iio.get_writer(
+                str(output_path),
+                fps=fps,
+                codec="libx264",
+                quality=8,
+                macro_block_size=1,  # allow odd width/height
+            )
+        except Exception:
+            self._renderer.close()
+            raise
         self._fps = fps
         self._closed = False
 
