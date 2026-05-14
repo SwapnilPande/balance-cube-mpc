@@ -6,8 +6,6 @@ recent torque is held (zero-order hold). Log samples once per control tick.
 """
 from __future__ import annotations
 
-from typing import Protocol
-
 import numpy as np
 
 from cubli_mpc.config import SimConfig
