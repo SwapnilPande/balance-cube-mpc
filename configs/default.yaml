@@ -1,0 +1,25 @@
+# Plausible starting values for a ~10 cm cube, ~0.4 kg, with a small reaction
+# wheel. Swap for measured values once available.
+hardware:
+  cube_side_length_m: 0.10
+  cube_mass_kg: 0.40
+  cube_com_offset_m: 0.0
+
+  wheel_mass_kg: 0.10
+  wheel_radius_m: 0.035
+  wheel_thickness_m: 0.010
+  wheel_offset_m: 0.0
+
+  motor_max_torque_nm: 0.20
+  motor_max_speed_rad_s: 600.0
+  motor_torque_constant: 0.01
+
+  edge_bearing_damping: 1.0e-4
+  wheel_bearing_damping: 1.0e-5
+
+sim:
+  dt_sim: 0.001
+  dt_control: 0.010
+  sensor_noise: false
+  sensor_delay_ms: 0.0
+  seed: 0

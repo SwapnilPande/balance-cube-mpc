@@ -67,3 +67,17 @@ def test_sim_config_defaults():
     assert cfg.sensor_noise is False
     assert cfg.sensor_delay_ms == 0.0
     assert cfg.seed == 0
+
+
+from pathlib import Path
+from cubli_mpc.config import load_config
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_load_default_config():
+    hw, sim = load_config(REPO_ROOT / "configs" / "default.yaml")
+    assert hw.cube_mass_kg == 0.40
+    assert hw.motor_max_torque_nm == 0.20
+    assert sim.dt_sim == 0.001
+    assert sim.dt_control == 0.010

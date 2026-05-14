@@ -90,3 +90,21 @@ class SimConfig:
     sensor_noise: bool = False
     sensor_delay_ms: float = 0.0
     seed: int = 0
+
+
+from pathlib import Path
+import yaml
+
+
+def load_config(path: str | Path) -> tuple[HardwareConfig, SimConfig]:
+    """Load HardwareConfig and SimConfig from a YAML file.
+
+    The YAML must have a top-level `hardware:` mapping; a `sim:` mapping is
+    optional and falls back to SimConfig defaults.
+    """
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    hw = HardwareConfig(**data["hardware"])
+    sim_data = data.get("sim", {}) or {}
+    sim = SimConfig(**sim_data)
+    return hw, sim
