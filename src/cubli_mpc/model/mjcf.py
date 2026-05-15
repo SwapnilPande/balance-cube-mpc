@@ -35,14 +35,25 @@ def build_mjcf(hw: HardwareConfig, sim: SimConfig | None = None) -> str:
     default = ET.SubElement(mujoco, "default")
     ET.SubElement(default, "geom", rgba="0.7 0.7 0.7 1")
 
+    # Checker texture for the ground: makes the cube's tilt motion obvious.
+    asset = ET.SubElement(mujoco, "asset")
+    ET.SubElement(asset, "texture", name="grid_tex",
+                  type="2d", builtin="checker",
+                  rgb1="0.30 0.32 0.36", rgb2="0.55 0.58 0.62",
+                  width="512", height="512")
+    ET.SubElement(asset, "material", name="grid_mat",
+                  texture="grid_tex", texrepeat="8 8",
+                  reflectance="0.05")
+
     worldbody = ET.SubElement(mujoco, "worldbody")
     ET.SubElement(worldbody, "light", pos="0 0 3", dir="0 0 -1")
     ET.SubElement(worldbody, "geom",
                   name="ground", type="plane",
-                  size="2 2 0.1", rgba="0.4 0.4 0.4 1",
+                  size="2 2 0.1", material="grid_mat",
                   pos="0 0 -0.001")
 
-    # Cube body: origin at the balancing edge.
+    # Cube body: origin at the balancing edge. Translucent so the internal
+    # reaction wheel is visible.
     cube = ET.SubElement(worldbody, "body", name="cube", pos="0 0 0")
     ET.SubElement(cube, "joint",
                   name="tilt", type="hinge", axis="0 1 0",
@@ -53,7 +64,7 @@ def build_mjcf(hw: HardwareConfig, sim: SimConfig | None = None) -> str:
                   pos=f"0 0 {com_h}",
                   euler="0 45 0",
                   mass=f"{hw.cube_mass_kg}",
-                  rgba="0.2 0.5 0.8 1")
+                  rgba="0.2 0.5 0.8 0.25")
     ET.SubElement(cube, "site", name="imu_site",
                   pos=f"0 0 {com_h}")
 
@@ -70,6 +81,16 @@ def build_mjcf(hw: HardwareConfig, sim: SimConfig | None = None) -> str:
                   euler="90 0 0",
                   mass=f"{hw.wheel_mass_kg}",
                   rgba="0.8 0.3 0.3 1")
+    # Asymmetric off-center stripe on the wheel face so spin angle (and
+    # direction) is readable at a glance. Site -> visual-only, leaves the
+    # wheel's inertia untouched.
+    r = hw.wheel_radius_m
+    half_t = hw.wheel_thickness_m / 2.0
+    ET.SubElement(wheel, "site", name="wheel_marker",
+                  type="box",
+                  size=f"{r * 0.45} {half_t + 1e-4} {r * 0.10}",
+                  pos=f"{r * 0.15} 0 0",
+                  rgba="1.0 0.85 0.1 1")
 
     # Actuator: torque-controlled motor on the wheel hinge.
     actuator = ET.SubElement(mujoco, "actuator")

@@ -45,10 +45,16 @@ class CubliEnv:
         self.data.qvel[self._tilt_dof_adr] = theta_dot0
         self.data.qvel[self._spin_dof_adr] = wheel_speed0
         self.data.ctrl[self._motor_id] = 0.0
+        self.data.qfrc_applied[:] = 0.0
         mujoco.mj_forward(self.model, self.data)
 
     def apply_torque(self, tau: float) -> None:
         self.data.ctrl[self._motor_id] = float(tau)
+
+    def apply_disturbance_torque(self, tau_ext: float) -> None:
+        """Set an external torque on the tilt DOF. Persists across steps
+        until overwritten; cleared on reset()."""
+        self.data.qfrc_applied[self._tilt_dof_adr] = float(tau_ext)
 
     def step(self) -> None:
         mujoco.mj_step(self.model, self.data)
