@@ -43,3 +43,51 @@ class ConstantReference:
         x_ref[:, 0] = self._target_theta
         u_ref = np.zeros((horizon, 1), dtype=np.float64)
         return x_ref, u_ref
+
+
+class PeriodicTrajectoryReference:
+    """A one-period reference loaded from disk; loops at the period.
+
+    Linear interpolation between samples in the saved time grid lets the
+    NMPC use any dt independent of the planner's `n_segments`.
+    """
+
+    def __init__(self, t: np.ndarray, x_ref: np.ndarray, u_ref: np.ndarray):
+        self._t = np.asarray(t, dtype=np.float64)
+        self._x = np.asarray(x_ref, dtype=np.float64)
+        self._u = np.asarray(u_ref, dtype=np.float64)
+        self._period = float(self._t[-1] - self._t[0])
+        if self._period <= 0:
+            raise ValueError("trajectory time grid must have positive span")
+
+    @classmethod
+    def from_file(cls, path: "str | Path") -> "PeriodicTrajectoryReference":
+        from pathlib import Path  # noqa: F401 — imported for type hint clarity
+        data = np.load(path)
+        return cls(data["t"], data["x_ref"], data["u_ref"])
+
+    def at(
+        self, t: float, dt: float, horizon: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        x_ref = np.empty((horizon + 1, 3), dtype=np.float64)
+        u_ref = np.empty((horizon, 1), dtype=np.float64)
+        for k in range(horizon + 1):
+            tk = (t + k * dt) % self._period
+            x_ref[k] = self._interp_x(tk)
+        for k in range(horizon):
+            tk = (t + k * dt) % self._period
+            u_ref[k] = self._interp_u(tk)
+        return x_ref, u_ref
+
+    def _interp_x(self, tq: float) -> np.ndarray:
+        # np.interp does linear interp on 1D; loop over 3 components.
+        return np.array([
+            np.interp(tq, self._t, self._x[:, 0]),
+            np.interp(tq, self._t, self._x[:, 1]),
+            np.interp(tq, self._t, self._x[:, 2]),
+        ])
+
+    def _interp_u(self, tq: float) -> np.ndarray:
+        # u_ref has one fewer entry than t; use midpoints for the grid.
+        t_u = 0.5 * (self._t[:-1] + self._t[1:])
+        return np.array([np.interp(tq, t_u, self._u[:, 0])])

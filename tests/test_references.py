@@ -37,3 +37,46 @@ def test_constant_reference_independent_of_time():
     b_x, b_u = ref.at(t=99.0, dt=0.01, horizon=4)
     assert np.allclose(a_x, b_x)
     assert np.allclose(a_u, b_u)
+
+
+from pathlib import Path
+
+from cubli_mpc.control.references import PeriodicTrajectoryReference
+
+
+def _write_trivial_swing(path: Path, period: float, n: int) -> Path:
+    """Write a synthetic swing trajectory: sine wave on theta, zeros
+    elsewhere. Used to test the reference's interpolation + wrap."""
+    t = np.linspace(0.0, period, n + 1)
+    x_ref = np.zeros((n + 1, 3))
+    x_ref[:, 0] = 0.1 * np.sin(2 * np.pi * t / period)
+    u_ref = np.zeros((n, 1))
+    np.savez(path, t=t, x_ref=x_ref, u_ref=u_ref)
+    return path
+
+
+def test_periodic_reference_loads_from_npz(tmp_path):
+    path = _write_trivial_swing(tmp_path / "s.npz", period=1.0, n=100)
+    ref = PeriodicTrajectoryReference.from_file(path)
+    x, u = ref.at(t=0.0, dt=0.01, horizon=5)
+    assert x.shape == (6, 3)
+    assert u.shape == (5, 1)
+
+
+def test_periodic_reference_loops_at_period(tmp_path):
+    """t=0 and t=period should give the same x_ref."""
+    path = _write_trivial_swing(tmp_path / "s.npz", period=1.0, n=100)
+    ref = PeriodicTrajectoryReference.from_file(path)
+    x_a, _ = ref.at(t=0.0, dt=0.01, horizon=3)
+    x_b, _ = ref.at(t=1.0, dt=0.01, horizon=3)
+    assert np.allclose(x_a, x_b, atol=1e-6)
+
+
+def test_periodic_reference_interpolates_between_samples(tmp_path):
+    """Mid-sample query should give a value between the two enclosing
+    samples (linear interp)."""
+    path = _write_trivial_swing(tmp_path / "s.npz", period=1.0, n=100)
+    ref = PeriodicTrajectoryReference.from_file(path)
+    x, _ = ref.at(t=0.25, dt=0.0, horizon=0)  # query single point
+    # sin(2*pi*0.25) = 1.0, scaled by 0.1
+    assert x[0, 0] == pytest.approx(0.1, abs=1e-3)
