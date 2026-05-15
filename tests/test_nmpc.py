@@ -4,9 +4,11 @@ import math
 import numpy as np
 import pytest
 
-from cubli_mpc.config import HardwareConfig
+from cubli_mpc.config import HardwareConfig, SimConfig
 from cubli_mpc.control.nmpc import NMPCConfig, NMPCController
 from cubli_mpc.control.references import ConstantReference
+from cubli_mpc.runner import Runner
+from cubli_mpc.sim.env import CubliEnv
 
 
 def _make_hw() -> HardwareConfig:
@@ -105,4 +107,26 @@ def test_nmpc_time_varying_reference_changes_torque():
     # toward the later target; constant-zero ref should command near zero.
     assert abs(tau_rising - tau_flat) > 1e-3, (
         f"tau_flat={tau_flat:.5f}, tau_rising={tau_rising:.5f}"
+    )
+
+
+def test_nmpc_recovers_from_15deg_tilt():
+    hw = _make_hw()
+    sim = SimConfig(dt_sim=0.001, dt_control=0.01)
+    env = CubliEnv(hw, sim)
+    env.reset(theta0=math.radians(15.0))
+
+    nmpc = NMPCController(hw, NMPCConfig(horizon_steps=40, dt=sim.dt_control))
+    runner = Runner(env, nmpc, sim)
+    log = runner.run(duration_s=5.0)
+
+    # Final state should be near upright.
+    theta_final = float(log["theta"][-1])
+    assert abs(theta_final) < math.radians(2.0), (
+        f"final theta = {math.degrees(theta_final):.2f} deg"
+    )
+    # Should not have fallen at any point.
+    theta_max = float(np.max(np.abs(log["theta"])))
+    assert theta_max < math.radians(20.0), (
+        f"max theta = {math.degrees(theta_max):.2f} deg"
     )
