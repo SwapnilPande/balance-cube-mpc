@@ -100,6 +100,15 @@ class NMPCController:
             "ipopt.print_level": cfg.ipopt_print_level,
             "ipopt.sb": "yes",
             "print_time": 0,
+            # Enable IPOPT primal+dual warm-start; when lam_x0/lam_g0 are
+            # supplied (subsequent calls), IPOPT skips its default
+            # perturbation heuristic and starts from the given point.
+            "ipopt.warm_start_init_point": "yes",
+            "ipopt.warm_start_bound_push": 1e-9,
+            "ipopt.warm_start_bound_frac": 1e-9,
+            "ipopt.warm_start_slack_bound_frac": 1e-9,
+            "ipopt.warm_start_slack_bound_push": 1e-9,
+            "ipopt.warm_start_mult_bound_push": 1e-9,
         }
         self._solver = ca.nlpsol("nmpc", "ipopt", nlp, opts)
 
@@ -123,16 +132,31 @@ class NMPCController:
         self._z_ub = z_ub
         self._n_x_vars = 3 * (N + 1)
         self._N = N
+        self._z_prev: np.ndarray | None = None
+        self._lam_x_prev: np.ndarray | None = None
+        self._lam_g_prev: np.ndarray | None = None
 
     def step(self, x_hat: np.ndarray, t: float) -> float:
         """Solve the NLP once and return the first commanded torque."""
         # Drop cyclic wheel angle from the 4D runner state.
         x0 = np.array([x_hat[0], x_hat[1], x_hat[3]], dtype=np.float64)
         x_ref, u_ref = self._reference.at(t, self._cfg.dt, self._N)
-        # Initial guess: hold x0, zero torque.
-        x_init = np.tile(x0, self._N + 1)
-        u_init = np.zeros(self._N)
-        z0 = np.concatenate([x_init, u_init])
+
+        if self._z_prev is None:
+            # Cold start: hold x0, zero torque.
+            x_init = np.tile(x0, self._N + 1)
+            u_init = np.zeros(self._N)
+            z0 = np.concatenate([x_init, u_init])
+            solver_kwargs: dict = {}
+        else:
+            z0 = self._shift_warm_start(self._z_prev, x0)
+            # Supply dual variables so IPOPT warm_start_init_point takes
+            # effect and skips the initial interior-point perturbation.
+            solver_kwargs = {
+                "lam_x0": self._lam_x_prev,
+                "lam_g0": self._lam_g_prev,
+            }
+
         # NOTE on flatten order: CasADi MX of shape (3, N+1) flattens
         # column-major to [theta_0, theta_dot_0, omega_w_0, theta_1, ...].
         # Our numpy x_ref has shape (N+1, 3) which is the transpose, so
@@ -146,12 +170,44 @@ class NMPCController:
         ])
         sol = self._solver(x0=z0, p=p,
                            lbx=self._z_lb, ubx=self._z_ub,
-                           lbg=self._g_lb, ubg=self._g_ub)
+                           lbg=self._g_lb, ubg=self._g_ub,
+                           **solver_kwargs)
         # TODO(Task 10): check sol["success"] / solver.stats() and fall
         # back to nonlinear-PD on failure. Consumed unconditionally for now.
         z_opt = np.array(sol["x"]).flatten()
+        self._z_prev = z_opt
+        self._lam_x_prev = np.array(sol["lam_x"]).flatten()
+        self._lam_g_prev = np.array(sol["lam_g"]).flatten()
         u0 = z_opt[self._n_x_vars]  # first U entry
         # Clip to hardware limit: IPOPT tolerance (~1e-8) can push u0 just
         # outside the box bounds even when the bound constraint is active.
-        u0 = float(np.clip(u0, -self._tau_max, self._tau_max))
-        return u0
+        return float(np.clip(u0, -self._tau_max, self._tau_max))
+
+    def _shift_warm_start(self, z_prev: np.ndarray,
+                          x0_new: np.ndarray) -> np.ndarray:
+        """Shift the previous (X, U) trajectory one step forward, replace
+        x_0 with the new measurement, and duplicate the last column."""
+        N = self._N
+        n_x = self._n_x_vars
+        X_prev = z_prev[:n_x].reshape(3, N + 1, order="F")
+        U_prev = z_prev[n_x:].reshape(1, N, order="F")
+
+        X_new = np.empty_like(X_prev)
+        X_new[:, 0] = x0_new
+        X_new[:, 1:N] = X_prev[:, 2:N + 1]
+        X_new[:, N] = X_prev[:, N]  # repeat terminal
+
+        U_new = np.empty_like(U_prev)
+        U_new[:, :N - 1] = U_prev[:, 1:N]
+        U_new[:, N - 1] = U_prev[:, N - 1]  # repeat last
+
+        return np.concatenate([
+            X_new.reshape(-1, order="F"),
+            U_new.reshape(-1, order="F"),
+        ])
+
+    def reset(self) -> None:
+        """Forget the previous solution; next step solves cold."""
+        self._z_prev = None
+        self._lam_x_prev = None
+        self._lam_g_prev = None

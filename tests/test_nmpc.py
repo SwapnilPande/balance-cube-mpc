@@ -1,5 +1,6 @@
 """Tests for the NMPC controller (M2 balance, no warm-start, no fallback)."""
 import math
+import time
 
 import numpy as np
 import pytest
@@ -129,4 +130,38 @@ def test_nmpc_recovers_from_15deg_tilt():
     theta_max = float(np.max(np.abs(log["theta"])))
     assert theta_max < math.radians(20.0), (
         f"max theta = {math.degrees(theta_max):.2f} deg"
+    )
+
+
+def test_nmpc_warm_start_speeds_up_subsequent_solves():
+    """Warm-started solves should be substantially faster than cold solves.
+
+    Strategy: use a large tilt angle (30 deg) so cold start needs many more
+    IPOPT iterations than a near-optimal warm start.  Throw away one call to
+    eliminate CasADi/IPOPT JIT overhead; measure a true cold solve via
+    reset(); then average several warm solves for robustness.
+    """
+    nmpc = NMPCController(_make_hw(), NMPCConfig(horizon_steps=40))
+    # 30 degrees: cold start needs ~18 IPOPT iterations from the zero
+    # trajectory guess, warm start converges in ~6 from the cached solution.
+    x_hat = np.array([math.radians(30.0), 0.0, 0.0, 0.0])
+
+    # Throw-away call: absorbs JIT / first-call overhead.
+    nmpc.step(x_hat, t=0.0)
+
+    # True cold solve: reset drops the previous solution and dual variables.
+    nmpc.reset()
+    t0 = time.perf_counter()
+    nmpc.step(x_hat, t=0.0)
+    cold_s = time.perf_counter() - t0
+
+    # Warm solves: previous primal+dual solution is cached from the cold call.
+    t0 = time.perf_counter()
+    for _ in range(5):
+        nmpc.step(x_hat, t=0.0)
+    warm_avg_s = (time.perf_counter() - t0) / 5
+
+    # Allow a generous margin; warm should be at least half cold.
+    assert warm_avg_s < cold_s * 0.6, (
+        f"cold={cold_s*1000:.1f} ms, warm avg={warm_avg_s*1000:.1f} ms"
     )
