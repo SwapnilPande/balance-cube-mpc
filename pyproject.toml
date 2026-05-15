@@ -11,6 +11,7 @@ dependencies = [
     "matplotlib>=3.8",
     "pyyaml>=6.0",
     "imageio[ffmpeg]>=2.34",
+    "casadi>=3.6",
 ]
 
 [project.optional-dependencies]
