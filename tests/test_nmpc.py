@@ -7,6 +7,7 @@ import pytest
 
 from cubli_mpc.config import HardwareConfig, SimConfig
 from cubli_mpc.control.nmpc import NMPCConfig, NMPCController
+from cubli_mpc.control.nonlinear_pd import NonlinearPDController, NonlinearPDGains
 from cubli_mpc.control.references import ConstantReference
 from cubli_mpc.runner import Runner
 from cubli_mpc.sim.env import CubliEnv
@@ -165,11 +166,6 @@ def test_nmpc_warm_start_speeds_up_subsequent_solves():
     assert warm_avg_s < cold_s * 0.6, (
         f"cold={cold_s*1000:.1f} ms, warm avg={warm_avg_s*1000:.1f} ms"
     )
-
-
-from cubli_mpc.control.nonlinear_pd import (
-    NonlinearPDController, NonlinearPDGains,
-)
 
 
 def _make_fallback_pd(hw):

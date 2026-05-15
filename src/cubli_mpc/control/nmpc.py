@@ -4,8 +4,10 @@ Direct multiple-shooting NLP solved by IPOPT each tick. State `[theta,
 theta_dot, omega_w]` (3D); the runner passes a 4D x_hat with the cyclic
 wheel angle, which we drop. Action: scalar torque on the wheel.
 
-This is the M2 / "stabilization NMPC" milestone from the parent spec.
-Warm-start and solver-failure fallback land in subsequent tasks.
+Warm-starts each solve from the previous solution (primal + IPOPT
+dual-warm-start). On IPOPT failure, falls back to a user-provided
+controller (typically the nonlinear-PD baseline) and tracks the
+failure count via `fallback_count`.
 """
 from __future__ import annotations
 
@@ -184,7 +186,7 @@ class NMPCController:
         success = bool(stats.get("success", False))
         if not success:
             self._fallback_count += 1
-            # Invalidate warm-start so the next solve starts cold.
+            # A failed iterate is a bad starting point for the next solve; cold-start instead.
             self._z_prev = None
             self._lam_x_prev = None
             self._lam_g_prev = None
