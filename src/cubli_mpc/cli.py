@@ -117,6 +117,45 @@ def _cmd_sim(args: argparse.Namespace) -> int:
                          plot_path=args.plot)
 
 
+def _cmd_eval(args: argparse.Namespace) -> int:
+    import json
+
+    from cubli_mpc.eval.runner import run_scenario
+    from cubli_mpc.eval.scenarios import SCENARIOS, get_scenario
+
+    hw, sim = load_config(args.config)
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    if args.scenarios == ["all"]:
+        names = sorted(SCENARIOS.keys())
+    else:
+        names = args.scenarios
+
+    # Sim args needed by _build_controller — fake the ones it expects.
+    args.seed = getattr(args, "seed", 0)
+
+    results: list[dict] = []
+    for name in names:
+        scenario = get_scenario(name)
+        controller = _build_controller(args, hw)
+        if hasattr(controller, "reset"):
+            controller.reset()
+        result = run_scenario(controller=controller, scenario=scenario,
+                              hw=hw, sim=sim, duration_s=args.duration)
+        plot_path = args.out / f"{name}.png"
+        log = result.pop("log")
+        target = scenario.target_theta_rad if scenario.target_theta_rad else None
+        _save_state_plot(log, plot_path, target_theta_rad=target)
+        results.append(result)
+        print(f"  {name}: survived={result['survived']} "
+              f"|theta|_max={result['theta_max_abs_deg']:.2f} deg "
+              f"tau_rms={result['torque_rms_nm']:.4f} Nm")
+
+    (args.out / "metrics.json").write_text(json.dumps(results, indent=2))
+    print(f"wrote {args.out / 'metrics.json'}")
+    return 0
+
+
 def _alloc_log(n: int) -> dict[str, np.ndarray]:
     return {
         "t": np.empty(n),
@@ -331,6 +370,31 @@ def main(argv: list[str] | None = None) -> int:
                        help="(NMPC) balance setpoint (degrees; 0 = upright). "
                             "Ignored if --swing-traj is given.")
     p_sim.set_defaults(func=_cmd_sim)
+
+    p_eval = sub.add_parser("eval", help="Evaluate a controller on named scenarios")
+    p_eval.add_argument("--config", required=True, type=Path)
+    p_eval.add_argument("--out", required=True, type=Path,
+                        help="Output directory for plots + metrics.json")
+    p_eval.add_argument("--scenarios", nargs="+", default=["all"],
+                        help='Scenario names, or "all"')
+    p_eval.add_argument("--duration", type=float, default=None,
+                        help="Override scenario duration (s)")
+    # Reuse the sim controller flags.
+    p_eval.add_argument("--controller",
+                        choices=("pd", "random", "policy", "nmpc"),
+                        default="pd")
+    p_eval.add_argument("--seed", type=int, default=0)
+    p_eval.add_argument("--policy-path", type=Path, default=None)
+    p_eval.add_argument("--policy-algo", choices=("sac", "ppo"), default=None)
+    p_eval.add_argument("--target-tilt-deg", type=float, default=0.0)
+    p_eval.add_argument("--kp", type=float, default=0.5)
+    p_eval.add_argument("--kd", type=float, default=0.05)
+    p_eval.add_argument("--k-wheel", type=float, default=1e-4)
+    p_eval.add_argument("--max-balance-tilt-deg", type=float, default=2.0)
+    p_eval.add_argument("--nmpc-horizon", type=int, default=50)
+    p_eval.add_argument("--nmpc-dt", type=float, default=0.010)
+    p_eval.add_argument("--nmpc-target-tilt-deg", type=float, default=0.0)
+    p_eval.set_defaults(func=_cmd_eval)
 
     p_train = sub.add_parser("train", help="Train an RL policy")
     p_train.add_argument("--config", required=True, type=Path)
