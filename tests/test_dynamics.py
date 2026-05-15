@@ -4,8 +4,9 @@ import math
 import numpy as np
 import pytest
 
-from cubli_mpc.config import HardwareConfig
+from cubli_mpc.config import HardwareConfig, SimConfig
 from cubli_mpc.model.dynamics import make_continuous_dynamics, make_rk4_step
+from cubli_mpc.sim.env import CubliEnv
 
 
 def _make_hw() -> HardwareConfig:
@@ -116,10 +117,6 @@ def test_rk4_positive_torque_decelerates_body_increases_wheel():
     assert x[2] > 0.0   # wheel speed positive
 
 
-from cubli_mpc.config import SimConfig
-from cubli_mpc.sim.env import CubliEnv
-
-
 @pytest.mark.parametrize("theta0,tau", [
     (0.05, 0.0),       # passive fall from small tilt
     (0.0,  0.02),      # constant torque from upright
@@ -128,10 +125,10 @@ from cubli_mpc.sim.env import CubliEnv
 def test_dynamics_matches_mujoco_open_loop(theta0, tau):
     """Integrate the CasADi RK4 dynamics and the MuJoCo plant from the
     same initial state with the same constant input. Trajectories should
-    agree to within ~1 deg on theta and ~5% on omega_w over 0.2 s.
+    agree to within ~1 deg on theta and ~10% on omega_w with a 0.5 rad/s
+    absolute floor for near-zero wheel speeds over 0.2 s.
     """
     hw = _make_hw()
-    # Increase damping a bit to make trajectories not diverge dramatically.
     sim = SimConfig(dt_sim=0.001, dt_control=0.01)
     F = make_rk4_step(hw, dt=sim.dt_control)
 
@@ -150,7 +147,8 @@ def test_dynamics_matches_mujoco_open_loop(theta0, tau):
         for _ in range(steps_per_control):
             env.step()
         s = env.state()
-        x_mj.append([s[0], s[1], s[3]])  # drop cyclic wheel angle
+        # state() = [theta, theta_dot, wheel_angle, omega_w]; drop wheel_angle (index 2)
+        x_mj.append([s[0], s[1], s[3]])
     x_mj = np.array(x_mj)
 
     # CasADi rollout (same control rate)
@@ -161,11 +159,19 @@ def test_dynamics_matches_mujoco_open_loop(theta0, tau):
         x_ca_traj.append(x_ca.copy())
     x_ca_traj = np.array(x_ca_traj)
 
+    # Generous tolerances because we intentionally have model mismatch
+    # (wheel mass absorbed by MuJoCo, not the CasADi model).
+
+    # Mid-horizon check (step 10 = 0.1 s): catches early-divergence bugs that
+    # might coincidentally converge back by the end of the horizon.
+    theta_err_mid = abs(x_mj[9, 0] - x_ca_traj[9, 0])
+    assert theta_err_mid < math.radians(2.0), (
+        f"theta mismatch at step 10: {math.degrees(theta_err_mid):.3f} deg"
+    )
+
     # Compare end-of-horizon states
     theta_err = abs(x_mj[-1, 0] - x_ca_traj[-1, 0])
     omega_err = abs(x_mj[-1, 2] - x_ca_traj[-1, 2])
-    # Generous tolerances because we intentionally have model mismatch
-    # (wheel mass absorbed by MuJoCo, not the CasADi model).
     assert theta_err < math.radians(2.0), (
         f"theta mismatch: {math.degrees(theta_err):.3f} deg"
     )
