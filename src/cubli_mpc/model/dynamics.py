@@ -45,3 +45,23 @@ def make_continuous_dynamics(hw: HardwareConfig) -> ca.Function:
     x_dot = ca.vertcat(theta_dot, theta_ddot, omega_w_dot)
     return ca.Function("cubli_dynamics", [x, u], [x_dot],
                        ["x", "u"], ["x_dot"])
+
+
+def make_rk4_step(hw: HardwareConfig, dt: float) -> ca.Function:
+    """Return CasADi Function F(x, u) -> x_next using explicit RK4.
+
+    `dt` is baked into the returned Function. For multi-rate use, build
+    one Function per dt.
+    """
+    f = make_continuous_dynamics(hw)
+    x = ca.MX.sym("x", 3)
+    u = ca.MX.sym("u", 1)
+
+    k1 = f(x, u)
+    k2 = f(x + 0.5 * dt * k1, u)
+    k3 = f(x + 0.5 * dt * k2, u)
+    k4 = f(x + dt * k3, u)
+    x_next = x + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+    return ca.Function("cubli_rk4", [x, u], [x_next],
+                       ["x", "u"], ["x_next"])
