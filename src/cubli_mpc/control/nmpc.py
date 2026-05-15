@@ -15,6 +15,7 @@ import casadi as ca
 import numpy as np
 
 from cubli_mpc.config import HardwareConfig
+from cubli_mpc.control.base import Controller
 from cubli_mpc.control.references import ConstantReference, Reference
 from cubli_mpc.model.dynamics import make_rk4_step
 
@@ -41,11 +42,14 @@ class NMPCController:
         hw: HardwareConfig,
         cfg: NMPCConfig,
         reference: Reference | None = None,
+        fallback_controller: Controller | None = None,
     ):
         self._hw = hw
         self._cfg = cfg
         self._reference = reference if reference is not None else ConstantReference()
         self._tau_max = float(hw.motor_max_torque_nm)
+        self._fallback = fallback_controller
+        self._fallback_count = 0
         self._build_solver()
 
     @property
@@ -55,6 +59,10 @@ class NMPCController:
     @property
     def reference(self) -> Reference:
         return self._reference
+
+    @property
+    def fallback_count(self) -> int:
+        return self._fallback_count
 
     def _build_solver(self) -> None:
         cfg = self._cfg
@@ -172,8 +180,17 @@ class NMPCController:
                            lbx=self._z_lb, ubx=self._z_ub,
                            lbg=self._g_lb, ubg=self._g_ub,
                            **solver_kwargs)
-        # TODO(Task 10): check sol["success"] / solver.stats() and fall
-        # back to nonlinear-PD on failure. Consumed unconditionally for now.
+        stats = self._solver.stats()
+        success = bool(stats.get("success", False))
+        if not success:
+            self._fallback_count += 1
+            # Invalidate warm-start so the next solve starts cold.
+            self._z_prev = None
+            self._lam_x_prev = None
+            self._lam_g_prev = None
+            if self._fallback is not None:
+                return float(self._fallback.step(x_hat, t))
+            return 0.0
         z_opt = np.array(sol["x"]).flatten()
         self._z_prev = z_opt
         self._lam_x_prev = np.array(sol["lam_x"]).flatten()

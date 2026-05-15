@@ -1,4 +1,4 @@
-"""Tests for the NMPC controller (M2 balance, no warm-start, no fallback)."""
+"""Tests for the NMPC controller (M2 balance, warm-start, fallback)."""
 import math
 import time
 
@@ -165,3 +165,50 @@ def test_nmpc_warm_start_speeds_up_subsequent_solves():
     assert warm_avg_s < cold_s * 0.6, (
         f"cold={cold_s*1000:.1f} ms, warm avg={warm_avg_s*1000:.1f} ms"
     )
+
+
+from cubli_mpc.control.nonlinear_pd import (
+    NonlinearPDController, NonlinearPDGains,
+)
+
+
+def _make_fallback_pd(hw):
+    return NonlinearPDController(
+        NonlinearPDGains(kp=0.5, kd=0.05, k_wheel=1e-4,
+                         max_balance_tilt=math.radians(2.0),
+                         max_torque=hw.motor_max_torque_nm),
+        hw,
+    )
+
+
+def test_nmpc_fallback_counter_starts_at_zero():
+    nmpc = NMPCController(_make_hw(), NMPCConfig(horizon_steps=10))
+    assert nmpc.fallback_count == 0
+
+
+def test_nmpc_fallback_returns_pd_value_on_solver_failure():
+    """Force a failure by setting ipopt_max_iter=0; verify the fallback
+    PD value is returned and the counter increments."""
+    hw = _make_hw()
+    pd = _make_fallback_pd(hw)
+    nmpc = NMPCController(
+        hw, NMPCConfig(horizon_steps=10, ipopt_max_iter=0),
+        fallback_controller=pd,
+    )
+    x_hat = np.array([math.radians(10.0), 0.5, 0.0, 0.0])
+    tau = nmpc.step(x_hat, t=0.0)
+    expected = pd.step(x_hat, 0.0)
+    assert tau == pytest.approx(expected)
+    assert nmpc.fallback_count == 1
+
+
+def test_nmpc_without_fallback_returns_zero_on_solver_failure():
+    """If no fallback is provided, the NMPC returns 0 on failure and
+    still counts the failure."""
+    nmpc = NMPCController(
+        _make_hw(), NMPCConfig(horizon_steps=10, ipopt_max_iter=0),
+    )
+    x_hat = np.array([math.radians(10.0), 0.5, 0.0, 0.0])
+    tau = nmpc.step(x_hat, t=0.0)
+    assert tau == 0.0
+    assert nmpc.fallback_count == 1

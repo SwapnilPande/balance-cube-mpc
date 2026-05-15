@@ -51,7 +51,14 @@ def _build_controller(args: argparse.Namespace, hw):
         ref = ConstantReference(
             target_theta=math.radians(args.nmpc_target_tilt_deg),
         )
-        return NMPCController(hw, cfg, reference=ref)
+        pd_gains = NonlinearPDGains(
+            kp=args.kp, kd=args.kd, k_wheel=args.k_wheel,
+            max_balance_tilt=math.radians(args.max_balance_tilt_deg),
+            max_torque=hw.motor_max_torque_nm,
+        )
+        fallback = NonlinearPDController(pd_gains, hw)
+        return NMPCController(hw, cfg, reference=ref,
+                              fallback_controller=fallback)
     gains = NonlinearPDGains(
         kp=args.kp, kd=args.kd, k_wheel=args.k_wheel,
         max_balance_tilt=math.radians(args.max_balance_tilt_deg),
