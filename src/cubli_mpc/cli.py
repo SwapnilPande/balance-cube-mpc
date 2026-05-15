@@ -117,6 +117,24 @@ def _cmd_sim(args: argparse.Namespace) -> int:
                          plot_path=args.plot)
 
 
+def _cmd_plan_swing(args: argparse.Namespace) -> int:
+    import math as _m
+
+    from cubli_mpc.control.swing_planner import SwingTrajConfig, plan_swing
+
+    hw, _sim = load_config(args.config)
+    cfg = SwingTrajConfig(
+        period_s=args.period,
+        theta_target_rad=_m.radians(args.theta_deg),
+        n_segments=args.n_segments,
+        smoothness_weight=args.smoothness,
+        save_path=args.out,
+    )
+    out = plan_swing(hw, cfg)
+    print(f"wrote {out}")
+    return 0
+
+
 def _cmd_eval(args: argparse.Namespace) -> int:
     import json
 
@@ -395,6 +413,20 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--nmpc-dt", type=float, default=0.010)
     p_eval.add_argument("--nmpc-target-tilt-deg", type=float, default=0.0)
     p_eval.set_defaults(func=_cmd_eval)
+
+    p_plan = sub.add_parser("plan-swing", help="Offline swing trajopt")
+    p_plan.add_argument("--config", required=True, type=Path)
+    p_plan.add_argument("--period", type=float, required=True,
+                        help="Swing period (s)")
+    p_plan.add_argument("--theta-deg", type=float, required=True,
+                        help="Swing amplitude (degrees)")
+    p_plan.add_argument("--n-segments", type=int, default=200,
+                        help="Multiple-shooting segments per half period")
+    p_plan.add_argument("--smoothness", type=float, default=1e-3,
+                        help="Weight on Σ(Δτ)² to discourage chatter")
+    p_plan.add_argument("--out", type=Path, required=True,
+                        help="Output .npz path")
+    p_plan.set_defaults(func=_cmd_plan_swing)
 
     p_train = sub.add_parser("train", help="Train an RL policy")
     p_train.add_argument("--config", required=True, type=Path)
