@@ -208,3 +208,37 @@ def test_nmpc_without_fallback_returns_zero_on_solver_failure():
     tau = nmpc.step(x_hat, t=0.0)
     assert tau == 0.0
     assert nmpc.fallback_count == 1
+
+
+def test_nmpc_tracks_swing_trajectory(tmp_path):
+    """Plan a 1.5 s / 10 deg swing and verify NMPC tracking holds RMS
+    theta-error well under the amplitude over 3 s."""
+    from cubli_mpc.control.references import PeriodicTrajectoryReference
+    from cubli_mpc.control.swing_planner import SwingTrajConfig, plan_swing
+
+    hw = _make_hw()
+    swing_path = tmp_path / "swing.npz"
+    plan_swing(hw, SwingTrajConfig(
+        period_s=1.5, theta_target_rad=math.radians(10.0),
+        n_segments=80, save_path=swing_path,
+    ))
+    ref = PeriodicTrajectoryReference.from_file(swing_path)
+
+    sim = SimConfig(dt_sim=0.001, dt_control=0.01)
+    env = CubliEnv(hw, sim)
+    env.reset(theta0=math.radians(10.0))  # start of swing
+
+    nmpc = NMPCController(
+        hw, NMPCConfig(horizon_steps=40, dt=sim.dt_control),
+        reference=ref,
+    )
+    runner = Runner(env, nmpc, sim)
+    log = runner.run(duration_s=3.0)
+
+    theta = log["theta"]
+    # Build the planned theta at the same time grid, then take RMS error.
+    t = log["t"]
+    target = np.array([ref._interp_x(float(ti) % 1.5)[0] for ti in t])
+    err = theta - target
+    rms_err_deg = math.degrees(float(np.sqrt(np.mean(err * err))))
+    assert rms_err_deg < 5.0, f"RMS tracking error {rms_err_deg:.2f} deg"

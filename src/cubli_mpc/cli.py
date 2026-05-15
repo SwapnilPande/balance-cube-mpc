@@ -46,11 +46,16 @@ def _build_controller(args: argparse.Namespace, hw):
         )
     if args.controller == "nmpc":
         from cubli_mpc.control.nmpc import NMPCConfig, NMPCController
-        from cubli_mpc.control.references import ConstantReference
-        cfg = NMPCConfig(horizon_steps=args.nmpc_horizon, dt=args.nmpc_dt)
-        ref = ConstantReference(
-            target_theta=math.radians(args.nmpc_target_tilt_deg),
+        from cubli_mpc.control.references import (
+            ConstantReference, PeriodicTrajectoryReference,
         )
+        cfg = NMPCConfig(horizon_steps=args.nmpc_horizon, dt=args.nmpc_dt)
+        if getattr(args, "swing_traj", None) is not None:
+            ref = PeriodicTrajectoryReference.from_file(args.swing_traj)
+        else:
+            ref = ConstantReference(
+                target_theta=math.radians(args.nmpc_target_tilt_deg),
+            )
         pd_gains = NonlinearPDGains(
             kp=args.kp, kd=args.kd, k_wheel=args.k_wheel,
             max_balance_tilt=math.radians(args.max_balance_tilt_deg),
@@ -387,6 +392,10 @@ def main(argv: list[str] | None = None) -> int:
     p_sim.add_argument("--nmpc-target-tilt-deg", type=float, default=0.0,
                        help="(NMPC) balance setpoint (degrees; 0 = upright). "
                             "Ignored if --swing-traj is given.")
+    p_sim.add_argument("--swing-traj", type=Path, default=None,
+                       help="(NMPC) Track the periodic reference loaded from "
+                            "this .npz (from `cubli-mpc plan-swing`). Overrides "
+                            "--nmpc-target-tilt-deg.")
     p_sim.set_defaults(func=_cmd_sim)
 
     p_eval = sub.add_parser("eval", help="Evaluate a controller on named scenarios")
