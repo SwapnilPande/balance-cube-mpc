@@ -128,7 +128,7 @@ from cubli_mpc.sim.env import CubliEnv
 def test_dynamics_matches_mujoco_open_loop(theta0, tau):
     """Integrate the CasADi RK4 dynamics and the MuJoCo plant from the
     same initial state with the same constant input. Trajectories should
-    agree to within ~1 deg on theta and ~5% on omega_w over 0.5 s.
+    agree to within ~1 deg on theta and ~5% on omega_w over 0.2 s.
     """
     hw = _make_hw()
     # Increase damping a bit to make trajectories not diverge dramatically.
@@ -139,7 +139,11 @@ def test_dynamics_matches_mujoco_open_loop(theta0, tau):
     env = CubliEnv(hw, sim)
     env.reset(theta0=theta0)
     steps_per_control = max(1, round(sim.dt_control / sim.dt_sim))
-    n_control_ticks = 20  # 0.2 s — stops before the cube hits MuJoCo's ground plane
+    # 20 ticks × dt_control=0.01 s = 0.2 s.  Keep the horizon short: beyond this
+    # MuJoCo's contact handling activates once the cube tips far enough, whereas
+    # the CasADi free-space ODE keeps integrating without contacts — making any
+    # longer comparison meaningless.
+    n_control_ticks = 20
     x_mj = []
     for _ in range(n_control_ticks):
         env.apply_torque(tau)
