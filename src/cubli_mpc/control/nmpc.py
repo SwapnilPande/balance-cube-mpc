@@ -23,6 +23,8 @@ from cubli_mpc.model.dynamics import make_rk4_step
 class NMPCConfig:
     horizon_steps: int = 50
     dt: float = 0.010
+    # 100.0 (not the spec's 50) so the cost is sensitive enough to overcome
+    # gravity counter-torque when tracking a non-zero theta reference.
     q_theta: float = 100.0
     q_theta_dot: float = 1.0
     q_omega_w: float = 1e-4
@@ -145,7 +147,7 @@ class NMPCController:
                            lbg=self._g_lb, ubg=self._g_ub)
         z_opt = np.array(sol["x"]).flatten()
         u0 = z_opt[self._n_x_vars]  # first U entry
-        # Clip to hardware limit: IPOPT may return values infinitesimally
-        # outside the box bounds due to solver tolerances.
+        # Clip to hardware limit: IPOPT tolerance (~1e-8) can push u0 just
+        # outside the box bounds even when the bound constraint is active.
         u0 = float(np.clip(u0, -self._tau_max, self._tau_max))
         return u0
