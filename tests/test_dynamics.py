@@ -77,27 +77,33 @@ def test_rk4_equilibrium_stays_at_equilibrium():
 
 
 def test_rk4_matches_fine_euler_for_small_dt():
-    """RK4 with dt=1ms should be very close to Euler with dt=1us over 10ms."""
+    """RK4 with dt=1ms should be very close to Euler with dt=1us over 10ms.
+
+    Verified for both zero torque and a nonzero constant torque to ensure
+    accuracy under active control.
+    """
     hw = _make_hw()
     f = make_continuous_dynamics(hw)
     F_rk4 = make_rk4_step(hw, dt=0.001)
 
     x0 = np.array([0.05, 0.0, 0.0])
-    u = np.array([0.0])
-
-    # RK4: 10 steps at 1ms
-    x_rk4 = x0.copy()
-    for _ in range(10):
-        x_rk4 = np.array(F_rk4(x_rk4, u)).flatten()
-
-    # Euler reference: 10000 steps at 1us
-    x_euler = x0.copy()
     dt_fine = 1e-6
-    for _ in range(10_000):
-        x_dot = np.array(f(x_euler, u)).flatten()
-        x_euler = x_euler + dt_fine * x_dot
 
-    assert np.allclose(x_rk4, x_euler, atol=1e-5)
+    for u in [np.array([0.0]), np.array([0.05])]:
+        # RK4: 10 steps at 1ms
+        x_rk4 = x0.copy()
+        for _ in range(10):
+            x_rk4 = np.array(F_rk4(x_rk4, u)).flatten()
+
+        # Euler reference: 10000 steps at 1us
+        x_euler = x0.copy()
+        for _ in range(10_000):
+            x_dot = np.array(f(x_euler, u)).flatten()
+            x_euler = x_euler + dt_fine * x_dot
+
+        assert np.allclose(x_rk4, x_euler, atol=1e-5), (
+            f"RK4 vs fine-Euler mismatch for u={u}: rk4={x_rk4}, euler={x_euler}"
+        )
 
 
 def test_rk4_positive_torque_decelerates_body_increases_wheel():
