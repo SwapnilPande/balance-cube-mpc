@@ -18,6 +18,8 @@ from cubli_mpc.eval.scenarios import Scenario
 from cubli_mpc.runner import Runner
 from cubli_mpc.sim.env import CubliEnv
 
+# 45° rather than the originally-spec'd 60°: the MuJoCo cube face-contacts
+# at ~45–48°, making 60° physically unreachable in simulation.
 SURVIVAL_THRESHOLD_RAD = math.radians(45.0)
 
 
