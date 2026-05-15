@@ -23,6 +23,7 @@ from cubli_mpc.control.nonlinear_pd import (
 )
 from cubli_mpc.control.random_torque import RandomController
 from cubli_mpc.runner import Runner
+from cubli_mpc.sim.disturbance import DisturbancePlan, StepDisturbance
 from cubli_mpc.sim.env import CubliEnv
 
 
@@ -43,6 +44,14 @@ def _build_controller(args: argparse.Namespace, hw):
             target_theta=math.radians(args.target_tilt_deg),
             algo=args.policy_algo,
         )
+    if args.controller == "nmpc":
+        from cubli_mpc.control.nmpc import NMPCConfig, NMPCController
+        from cubli_mpc.control.references import ConstantReference
+        cfg = NMPCConfig(horizon_steps=args.nmpc_horizon, dt=args.nmpc_dt)
+        ref = ConstantReference(
+            target_theta=math.radians(args.nmpc_target_tilt_deg),
+        )
+        return NMPCController(hw, cfg, reference=ref)
     gains = NonlinearPDGains(
         kp=args.kp, kd=args.kd, k_wheel=args.k_wheel,
         max_balance_tilt=math.radians(args.max_balance_tilt_deg),
@@ -51,12 +60,36 @@ def _build_controller(args: argparse.Namespace, hw):
     return NonlinearPDController(gains, hw)
 
 
+def _build_disturbance(args: argparse.Namespace) -> DisturbancePlan | None:
+    """Build a DisturbancePlan from CLI flags, or return None if no
+    disturbance was requested."""
+    steps: list[StepDisturbance] = []
+    for trio in (args.disturbance_step or []):
+        mag, start, dur = trio
+        steps.append(StepDisturbance(
+            magnitude=float(mag), start_t=float(start), duration=float(dur),
+        ))
+    impulse_mag, impulse_rate = 0.0, 0.0
+    if args.disturbance_impulses is not None:
+        impulse_mag, impulse_rate = (float(args.disturbance_impulses[0]),
+                                     float(args.disturbance_impulses[1]))
+    if not steps and impulse_mag == 0.0:
+        return None
+    return DisturbancePlan(
+        steps=steps,
+        impulse_magnitude=impulse_mag,
+        impulse_rate_per_s=impulse_rate,
+        seed=args.disturbance_seed,
+    )
+
+
 def _cmd_sim(args: argparse.Namespace) -> int:
     hw, sim = load_config(args.config)
     env = CubliEnv(hw, sim)
     env.reset(theta0=math.radians(args.initial_tilt_deg))
 
     controller = _build_controller(args, hw)
+    disturbance = _build_disturbance(args)
 
     if args.viewer and args.video:
         print("error: --viewer and --video are mutually exclusive",
@@ -64,13 +97,16 @@ def _cmd_sim(args: argparse.Namespace) -> int:
         return 2
     if args.viewer:
         return _run_with_viewer(env, controller, sim, args.duration,
+                                disturbance=disturbance,
                                 plot_path=args.plot)
     if args.video:
         return _run_with_recorder(env, controller, sim, args.duration,
                                   args.video, args.video_fps,
                                   args.video_width, args.video_height,
+                                  disturbance=disturbance,
                                   plot_path=args.plot)
     return _run_headless(env, controller, sim, args.duration,
+                         disturbance=disturbance,
                          plot_path=args.plot)
 
 
@@ -82,17 +118,19 @@ def _alloc_log(n: int) -> dict[str, np.ndarray]:
         "wheel_angle": np.empty(n),
         "wheel_speed": np.empty(n),
         "tau": np.empty(n),
+        "tau_ext": np.zeros(n),
     }
 
 
 def _record_step(log: dict[str, np.ndarray], i: int, t: float,
-                 x: np.ndarray, tau: float) -> None:
+                 x: np.ndarray, tau: float, tau_ext: float = 0.0) -> None:
     log["t"][i] = t
     log["theta"][i] = x[0]
     log["theta_dot"][i] = x[1]
     log["wheel_angle"][i] = x[2]
     log["wheel_speed"][i] = x[3]
     log["tau"][i] = tau
+    log["tau_ext"][i] = tau_ext
 
 
 def _print_summary(log: dict[str, np.ndarray]) -> None:
@@ -111,7 +149,11 @@ def _save_state_plot(log: dict[str, np.ndarray], path: Path,
     import matplotlib.pyplot as plt
 
     t = log["t"]
-    fig, axes = plt.subplots(4, 1, sharex=True, figsize=(8, 9))
+    tau_ext = log.get("tau_ext")
+    has_disturbance = tau_ext is not None and float(np.max(np.abs(tau_ext))) > 0
+    n_panels = 5 if has_disturbance else 4
+    fig, axes = plt.subplots(n_panels, 1, sharex=True,
+                             figsize=(8, 2.25 * n_panels))
     axes[0].plot(t, np.degrees(log["theta"]), color="C0")
     if target_theta_rad is not None:
         axes[0].axhline(math.degrees(target_theta_rad),
@@ -125,7 +167,11 @@ def _save_state_plot(log: dict[str, np.ndarray], path: Path,
     axes[2].set_ylabel("ω_wheel (rad/s)")
     axes[3].plot(t, log["tau"], color="C4")
     axes[3].set_ylabel("τ (Nm)")
-    axes[3].set_xlabel("time (s)")
+    if has_disturbance:
+        axes[4].plot(t, tau_ext, color="C5")
+        axes[4].axhline(0, color="k", lw=0.5, alpha=0.3)
+        axes[4].set_ylabel("τ_ext (Nm)")
+    axes[-1].set_xlabel("time (s)")
     for ax in axes:
         ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -139,8 +185,9 @@ def _controller_target_theta(controller) -> float | None:
 
 
 def _run_headless(env, controller, sim, duration: float,
+                  disturbance: DisturbancePlan | None = None,
                   plot_path: Path | None = None) -> int:
-    runner = Runner(env, controller, sim)
+    runner = Runner(env, controller, sim, disturbance=disturbance)
     log = runner.run(duration_s=duration)
     _print_summary(log)
     if plot_path is not None:
@@ -150,6 +197,7 @@ def _run_headless(env, controller, sim, duration: float,
 
 
 def _run_with_viewer(env, controller, sim, duration: float,
+                     disturbance: DisturbancePlan | None = None,
                      plot_path: Path | None = None) -> int:
     import mujoco.viewer
 
@@ -165,8 +213,12 @@ def _run_with_viewer(env, controller, sim, duration: float,
             t = env.time
             tau = float(controller.step(x, t))
             env.apply_torque(tau)
+            tau_ext = 0.0
+            if disturbance is not None:
+                tau_ext = disturbance.at(t, sim.dt_control)
+                env.apply_disturbance_torque(tau_ext)
             if log is not None:
-                _record_step(log, i, t, x, tau)
+                _record_step(log, i, t, x, tau, tau_ext)
                 actual_ticks = i + 1
             for _ in range(steps_per_control):
                 env.step()
@@ -181,6 +233,7 @@ def _run_with_viewer(env, controller, sim, duration: float,
 def _run_with_recorder(env, controller, sim, duration: float,
                        video_path: Path, fps: int,
                        width: int, height: int,
+                       disturbance: DisturbancePlan | None = None,
                        plot_path: Path | None = None) -> int:
     from cubli_mpc.sim.recorder import VideoRecorder
 
@@ -196,8 +249,12 @@ def _run_with_recorder(env, controller, sim, duration: float,
             t = env.time
             tau = float(controller.step(x, t))
             env.apply_torque(tau)
+            tau_ext = 0.0
+            if disturbance is not None:
+                tau_ext = disturbance.at(t, sim.dt_control)
+                env.apply_disturbance_torque(tau_ext)
             if log is not None:
-                _record_step(log, i, t, x, tau)
+                _record_step(log, i, t, x, tau, tau_ext)
             for _ in range(steps_per_control):
                 env.step()
             if i % capture_every == 0:
@@ -218,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     p_sim.add_argument("--duration", type=float, default=5.0)
     p_sim.add_argument("--initial-tilt-deg", type=float, default=5.0)
     p_sim.add_argument("--controller",
-                       choices=("pd", "random", "policy"), default="pd",
+                       choices=("pd", "random", "policy", "nmpc"), default="pd",
                        help="Which controller to run (default: pd)")
     p_sim.add_argument("--seed", type=int, default=0,
                        help="RNG seed for the random controller")
@@ -244,8 +301,28 @@ def main(argv: list[str] | None = None) -> int:
     p_sim.add_argument("--video-width", type=int, default=640)
     p_sim.add_argument("--video-height", type=int, default=480)
     p_sim.add_argument("--plot", type=Path, default=None,
-                       help="Save a 4-panel state-trace plot (θ, θ̇, "
-                            "ω_wheel, τ) to this path")
+                       help="Save a state-trace plot (θ, θ̇, ω_wheel, τ, "
+                            "plus τ_ext if disturbances are active) to "
+                            "this path")
+    p_sim.add_argument("--disturbance-step", nargs=3, action="append",
+                       metavar=("MAG", "START", "DUR"), default=None,
+                       help="Inject a constant MAG (Nm) external torque on "
+                            "the tilt DOF starting at START (s) for DUR (s). "
+                            "Repeatable for multiple events.")
+    p_sim.add_argument("--disturbance-impulses", nargs=2, default=None,
+                       metavar=("MAG", "RATE"),
+                       help="Inject ±MAG (Nm) one-tick impulses at Poisson "
+                            "rate RATE per second on the tilt DOF.")
+    p_sim.add_argument("--disturbance-seed", type=int, default=0,
+                       help="RNG seed for the impulse disturbance stream")
+    p_sim.add_argument("--nmpc-horizon", type=int, default=50,
+                       help="(NMPC) prediction horizon in steps")
+    p_sim.add_argument("--nmpc-dt", type=float, default=0.010,
+                       help="(NMPC) prediction step (s); matches dt_control "
+                            "by default")
+    p_sim.add_argument("--nmpc-target-tilt-deg", type=float, default=0.0,
+                       help="(NMPC) balance setpoint (degrees; 0 = upright). "
+                            "Ignored if --swing-traj is given.")
     p_sim.set_defaults(func=_cmd_sim)
 
     p_train = sub.add_parser("train", help="Train an RL policy")
