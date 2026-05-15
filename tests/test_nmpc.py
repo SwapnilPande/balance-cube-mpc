@@ -70,3 +70,39 @@ def test_nmpc_target_theta_property():
         reference=ConstantReference(target_theta=0.1),
     )
     assert nmpc.target_theta == pytest.approx(0.1)
+
+
+class _StepReference:
+    """Helper: returns target_theta_initial for k<switch_k, target_theta_late for k>=switch_k."""
+
+    def __init__(self, target_theta_initial: float, target_theta_late: float,
+                 switch_k: int = 5):
+        self._initial = float(target_theta_initial)
+        self._late = float(target_theta_late)
+        self._switch = int(switch_k)
+
+    def at(self, t, dt, horizon):
+        x_ref = np.zeros((horizon + 1, 3), dtype=np.float64)
+        for k in range(horizon + 1):
+            x_ref[k, 0] = self._initial if k < self._switch else self._late
+        u_ref = np.zeros((horizon, 1), dtype=np.float64)
+        return x_ref, u_ref
+
+
+def test_nmpc_time_varying_reference_changes_torque():
+    """A reference that jumps to a non-zero target later in the horizon
+    should produce a different commanded torque than a constant-zero
+    reference, even when the current state is upright."""
+    hw = _make_hw()
+    cfg = NMPCConfig(horizon_steps=20)
+    flat = NMPCController(hw, cfg, reference=ConstantReference(target_theta=0.0))
+    rising = NMPCController(hw, cfg, reference=_StepReference(0.0, 0.1, switch_k=5))
+    x_hat = np.array([0.0, 0.0, 0.0, 0.0])
+    tau_flat = flat.step(x_hat, t=0.0)
+    rising.step(x_hat, t=0.0)  # warm or not, just run
+    tau_rising = rising.step(x_hat, t=0.0)
+    # Step reference should command non-zero torque to start moving theta
+    # toward the later target; constant-zero ref should command near zero.
+    assert abs(tau_rising - tau_flat) > 1e-3, (
+        f"tau_flat={tau_flat:.5f}, tau_rising={tau_rising:.5f}"
+    )

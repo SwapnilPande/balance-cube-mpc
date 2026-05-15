@@ -134,9 +134,11 @@ class NMPCController:
         u_init = np.zeros(self._N)
         z0 = np.concatenate([x_init, u_init])
         # NOTE on flatten order: CasADi MX of shape (3, N+1) flattens
-        # column-major to [state_at_t0 (3), state_at_t1 (3), ...]. The
-        # numpy x_ref has shape (N+1, 3) so we want row-major flatten,
-        # which is numpy's default (`order="C"`).
+        # column-major to [theta_0, theta_dot_0, omega_w_0, theta_1, ...].
+        # Our numpy x_ref has shape (N+1, 3) which is the transpose, so
+        # numpy's row-major (default `order="C"`) produces exactly the same
+        # sequence: [x_ref[0,0], x_ref[0,1], x_ref[0,2], x_ref[1,0], ...]
+        # = [theta_0, theta_dot_0, omega_w_0, theta_1, ...]. They match.
         p = np.concatenate([
             x0,
             x_ref.reshape(-1),
@@ -145,6 +147,8 @@ class NMPCController:
         sol = self._solver(x0=z0, p=p,
                            lbx=self._z_lb, ubx=self._z_ub,
                            lbg=self._g_lb, ubg=self._g_ub)
+        # TODO(Task 10): check sol["success"] / solver.stats() and fall
+        # back to nonlinear-PD on failure. Consumed unconditionally for now.
         z_opt = np.array(sol["x"]).flatten()
         u0 = z_opt[self._n_x_vars]  # first U entry
         # Clip to hardware limit: IPOPT tolerance (~1e-8) can push u0 just
