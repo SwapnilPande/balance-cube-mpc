@@ -59,6 +59,8 @@ class PeriodicTrajectoryReference:
         self._period = float(self._t[-1] - self._t[0])
         if self._period <= 0:
             raise ValueError("trajectory time grid must have positive span")
+        # Midpoints for the u-grid (u has one fewer entry than t).
+        self._t_u = 0.5 * (self._t[:-1] + self._t[1:])
 
     @classmethod
     def from_file(cls, path: "str | Path") -> "PeriodicTrajectoryReference":
@@ -88,6 +90,4 @@ class PeriodicTrajectoryReference:
         ])
 
     def _interp_u(self, tq: float) -> np.ndarray:
-        # u_ref has one fewer entry than t; use midpoints for the grid.
-        t_u = 0.5 * (self._t[:-1] + self._t[1:])
-        return np.array([np.interp(tq, t_u, self._u[:, 0])])
+        return np.array([np.interp(tq, self._t_u, self._u[:, 0])])
