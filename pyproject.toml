@@ -18,6 +18,13 @@ dev = [
     "pytest>=7.4",
     "imageio[pyav]>=2.34",
 ]
+rl = [
+    "gymnasium>=0.29",
+    "stable-baselines3>=2.3",
+    "torch>=2.0",
+    "tensorboard>=2.15",
+    "wandb>=0.16",
+]
 
 [project.scripts]
 cubli-mpc = "cubli_mpc.cli:main"
