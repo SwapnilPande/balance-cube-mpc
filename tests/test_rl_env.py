@@ -71,6 +71,16 @@ def test_episode_terminates_on_fall():
     assert terminated is True
 
 
+def test_default_env_terminates_on_clearly_fallen_cube():
+    """Regression: the default fall_tilt_rad must be reachable in MuJoCo.
+    Earlier defaults of 60° were never triggered (cube face-contacts at
+    ~45°) and produced wasted post-fall transitions in training data."""
+    env = _make_env()  # default EnvConfig
+    env.reset(seed=0, options={"theta0": math.radians(50)})
+    obs, reward, terminated, truncated, info = env.step(np.array([0.0]))
+    assert terminated is True
+
+
 def test_episode_truncates_on_timeout():
     env = _make_env(env_cfg=EnvConfig(
         episode_steps=3,
@@ -101,16 +111,39 @@ def test_target_theta_routes_through_obs():
 
 
 def test_target_theta_shifts_reward_zero():
-    """Reward should be ~maximal when theta == target, regardless of which
-    target was set."""
-    env = _make_env(reward_cfg=RewardConfig(
+    """Reward at theta == target equals the alive_bonus (zero cost). The
+    only term left when other weights are zero is alive_bonus - w_theta*err^2,
+    which collapses to alive_bonus when err == 0."""
+    cfg = RewardConfig(
+        alive_bonus=1.0,
         w_theta=10.0, w_theta_dot=0.0, w_omega=0.0, w_tau=0.0,
-    ))
+    )
+    env = _make_env(reward_cfg=cfg)
     target = 0.1
     env.reset(seed=0, options={"theta0": target, "target_theta": target})
     _, reward_at_target, _, _, _ = env.step(np.array([0.0]))
-    # Reward at target should be small in magnitude (close to zero).
-    assert abs(reward_at_target) < 0.01
+    assert reward_at_target == pytest.approx(cfg.alive_bonus, abs=0.01)
+
+
+def test_alive_bonus_dominates_at_balance():
+    """Net reward at perfect balance should be strictly positive (alive
+    bonus exceeds the near-zero cost) so the agent is rewarded for
+    staying alive, not just for accumulating less negative cost."""
+    env = _make_env()  # defaults
+    env.reset(seed=0, options={"theta0": 0.0})
+    _, reward, _, _, _ = env.step(np.array([0.0]))
+    assert reward > 0.0
+
+
+def test_fall_step_reward_is_large_negative():
+    """On the terminating step, the agent receives (alive_bonus - cost) -
+    fall_penalty. With defaults that's a strongly negative reward, which
+    is what trains the agent away from the fall region."""
+    env = _make_env()  # defaults
+    env.reset(seed=0, options={"theta0": math.radians(50)})
+    _, reward, terminated, _, _ = env.step(np.array([0.0]))
+    assert terminated is True
+    assert reward < -100.0
 
 
 def test_disturbance_plan_seed_reproducible():
