@@ -63,6 +63,22 @@ def test_plan_swing_boundary_conditions(tmp_path: Path):
     assert x[-1, 0] == pytest.approx(theta_target, abs=1e-3)
 
 
+def test_plan_swing_trajectory_is_periodic(tmp_path: Path):
+    """The mirrored full trajectory must be periodic in *all* states:
+    x_ref[0] should match x_ref[-1] in theta, theta_dot, and omega_w.
+    A bug where omega_w(T/2) was unconstrained left a jump at t=T."""
+    cfg = SwingTrajConfig(
+        period_s=1.0, theta_target_rad=math.radians(15.0),
+        n_segments=40, save_path=tmp_path / "swing.npz",
+    )
+    out = plan_swing(_make_hw(), cfg)
+    data = np.load(out)
+    x = data["x_ref"]
+    assert x[0, 0] == pytest.approx(x[-1, 0], abs=1e-3)  # theta
+    assert x[0, 1] == pytest.approx(x[-1, 1], abs=1e-3)  # theta_dot
+    assert x[0, 2] == pytest.approx(x[-1, 2], abs=1e-3)  # omega_w
+
+
 def test_plan_swing_torque_within_limits(tmp_path: Path):
     hw = _make_hw()
     cfg = SwingTrajConfig(

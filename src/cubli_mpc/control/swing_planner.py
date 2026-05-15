@@ -61,6 +61,8 @@ def plan_swing(hw: HardwareConfig, cfg: SwingTrajConfig) -> Path:
     g_list.append(X[2, 0])  # start with zero wheel speed for repeatability
     g_list.append(X[0, N] + cfg.theta_target_rad)
     g_list.append(X[1, N])
+    g_list.append(X[2, N])  # symmetric to X[2, 0]; required for the
+                            # mirrored trajectory to be truly periodic.
 
     g = ca.vertcat(*g_list)
     z = ca.vertcat(ca.reshape(X, -1, 1), ca.reshape(U, -1, 1))
