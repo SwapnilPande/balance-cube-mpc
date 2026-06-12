@@ -3,16 +3,15 @@
 Strategies / directions discovered but not (fully) pursued. Prune as tried.
 
 ## Control strategies
-- **Reference-tracking (feedforward + PD), time-indexed.** Track θ_ref(t) =
-  coast-burst (or the swing_planner min-effort) trajectory. Period is EXACT and
-  the clock keeps absolute wall-time (arguably the *correct* clock behavior — a
-  real clock keeps time, it doesn't phase-drift). This is where the user's
-  stiction intuition lives: a sine-tracking controller needs precise small
-  torques through the zero-crossing and should degrade hard under a deadband,
-  while a coast-burst feedforward puts the big torques where they're needed.
-  Repo already has `swing_planner` + `PeriodicTrajectoryReference` + NMPC; a
-  light version = precomputed feedforward τ(t) + PD on tracking error (fast).
-  Compare stiction robustness vs the autonomous limit cycle.
+- **DONE: NMPC tracking the min-effort plan** (`build_nmpc_metronome`, exp
+  `nmpc-track-plan`). Period exact under nominal/stiction/mismatch; validates the
+  user's bursts-beat-stiction intuition for tracking control. Cost: RMS 0.040
+  (tracking overhead) + IPOPT/tick.
+- **Light reference-tracking (feedforward τ*(t) + PD), no solver.** Same
+  time-indexed coast-burst reference as the NMPC but replace IPOPT with the
+  precomputed plan torque as feedforward + a PD on tracking error. Should keep
+  most of NMPC's period-robustness at a fraction of the compute — the practical
+  sim2real-friendly version. Compare RMS / robustness to full NMPC.
 - **Self-tuning FL (online period lock).** A slow outer loop that nudges
   `gravity_scale` / `omega0` so the *measured* period → 1.0 s on the real plant.
   Would absorb mass/inertia mismatch (the main FL sim2real weakness) and make a

@@ -109,29 +109,37 @@ torque_rms **0.0314** (−26% vs sine), crest **2.19**, mismatch robustness
   near-zero coast gets eaten). h=3 chosen (organic, matches the min-effort
   crest≈2.3 the user liked, mild stiction cost).
 
-Strategies compared (`onyx/compare_strategies.py`):
+Strategies compared (`onyx/compare_strategies.py` → `runs/metronome/compare.png`):
 - **FL sine** (h=0): RMS 0.043, crest 1.42, stiction 0.015, mismatch 0.29.
-- **FL organic** (h=3): RMS 0.031, crest 2.19, stiction 0.076, mismatch 0.13. ★
+- **FL organic** (h=3): RMS **0.031**, crest 2.19, stiction 0.076, mismatch 0.13.
+  ★ lightweight default — cheapest control, self-starting.
 - **bang-bang relay**: pe 0.015, RMS 0.041, crest 1.47, stiction 0.065,
-  mismatch **falls (1.0)**. DOMINATED — see below.
+  mismatch **falls**. DOMINATED.
+- **NMPC (track min-effort plan)**: pe **0.0**, RMS 0.040, crest 2.19, peak 0.088,
+  **stiction 0.0, mismatch 0.0**. Most robust period; heavy (IPOPT/tick).
+  `build_nmpc_metronome()`; run via `STRATEGY="nmpc"` (NOT in hot eval.sh).
 
 Sim2real conclusions:
-- **Mass mismatch:** FL period is sensitive via the *gravity* cancellation (sine
-  drifts to 1.29 s under +10/20% mass). HARDENING fixes most of this.
-- **Friction mismatch:** FL TOPPLES at ≥2× bearing friction (not in the metric;
-  too harsh). Real fragility → a friction feedforward / integral term is the
-  sim2real to-do.
-- **Motor stiction:** for an *autonomous limit cycle* a torque deadband hurts
-  (loses small coast corrections). The reaction WHEEL spins continuously (±150
-  rad/s) so breakaway stiction is mild vs a direct-drive joint; torque
-  *resolution/quantization* is the real limit. The user's "bursts beat stiction"
-  intuition applies to *reference-tracking* control (needs precise small torques
-  through zero), a strategy not yet built — see `onyx.ideas.md`.
+- **Autonomous limit cycle (FL) vs time-indexed tracking (NMPC) is the key axis.**
+  FL's period EMERGES from dynamics → drifts when the model is wrong (sine → 1.29 s
+  under +10/20% mass; the *gravity* cancellation is the sensitive part; hardening
+  halves the drift). NMPC tracks a wall-time reference → period stays EXACTLY 1.0 s
+  under both mass mismatch and stiction, and feedback holds amplitude (7.2–7.4°).
+  Cost: NMPC RMS 0.040 > FL 0.031 (closed-loop tracking overhead eats the
+  open-loop min-effort optimum) + per-tick IPOPT. FL self-starts & re-attracts
+  after disturbance for free; time-indexed NMPC would need phase re-sync.
+- **Motor stiction:** a torque deadband hurts the *autonomous* limit cycle (loses
+  small coast corrections — worse with more hardening) but barely touches the
+  NMPC tracking the coast-burst plan (its torques sit above the deadband). So the
+  user's "bursts beat stiction" intuition holds for *tracking* control, not for
+  the autonomous oscillator. Also the reaction WHEEL spins continuously (±150
+  rad/s) → breakaway stiction is mild here vs a direct-drive joint.
+- **Friction mismatch:** FL TOPPLES at ≥2× bearing friction (not in the metric).
+  Real fragility → friction feedforward / integral (offset-free) term is the to-do.
 - **bang-bang is ill-suited to a SLOW inverted metronome:** reaching 1.0 s forces
-  a weak burst (no authority margin → topples under mismatch); and an inverted
+  a weak burst (no authority margin → topples under mismatch); an inverted
   pendulum can't glide slowly at angle (it falls), so the strong-burst+long-coast
-  recipe that makes a relay robust is unreachable here. Bang-bang is also NOT
-  organic (square-ish → low crest).
+  recipe that makes a relay robust is unreachable. Also not organic (low crest).
 
 Dead ends / non-levers: chasing omega0 past ~4 decimals = overfitting the
 period estimator's numerical floor. use_sin_restoring unused. Pure bang-bang
