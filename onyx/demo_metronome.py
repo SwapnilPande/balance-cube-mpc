@@ -19,7 +19,7 @@ from cubli_mpc.sim.env import CubliEnv
 from cubli_mpc.sim.recorder import VideoRecorder
 from cubli_mpc.cli import _save_state_plot, _alloc_log, _record_step
 
-DURATION = 6.0
+DURATION = 8.0
 FPS = 30
 OUT = Path("runs/metronome")
 
