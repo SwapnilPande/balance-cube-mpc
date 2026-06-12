@@ -57,16 +57,38 @@ period from upward zero-crossings of θ). Outputs `METRIC name=value` lines.
 
 ## What's Been Tried
 
-(baseline) Feedback-linearized linear-restoring oscillator, omega0=2π, A=15°,
-mu=8: realized period **1.84 s** (≈2× target), amplitude drifted to 32°, wheel
-speed 1337 rad/s (over limit), torque saturating ~9%. Root cause: inversion
-uses cube-only I_b; MuJoCo's true tilt inertia is larger → realized oscillator
-~3× softer → period too long + amplitude regulation too weak.
+**SOLVED.** Best: omega0=4.305, A=7°, mu=20, inertia_scale=2.54,
+gravity_scale=1.25, linear restoring → period **1.000042 s** (period_error
+0.000042 s), torque_rms 0.043 Nm, wheel speed 161 rad/s. Clean limit cycle
+(period_std ~0), globally attracting, robust to sensor noise.
 
-Key levers / hypotheses to explore:
-- Raise omega0 to compensate the softening (period scales ~1/omega_eff).
-- Identify/scale effective tilt inertia in the inversion so omega0 maps to
-  realized frequency 1:1 (then period control becomes direct).
-- Control amplitude: stronger mu, or seed IC on the cycle; keep A small to cut
-  torque and wheel speed (torque ∝ gravity feedforward ∝ sin(amplitude)).
-- sin vs linear restoring trades period-vs-amplitude coupling.
+Path that got here:
+1. (baseline) omega0=2π, A=15°, mu=8, no scales: period 1.84 s, amplitude ran
+   away to 32°, heavy saturation. Two compounding errors: under-modeled
+   tau→tilt gain AND under-cancelled gravity.
+2. **inertia_scale=2.54** — MuJoCo's realized tau→theta_ddot gain is ~2.54×
+   softer than the analytic 1/I_b (wheel↔cube torque coupling, not just mass).
+   Fixing it kills the amplitude runaway → energy regulator holds A exactly.
+3. **gravity_scale=1.25** — config `mgL` counts cube mass only; true gravity
+   moment includes the wheel (~1.25×). Under-cancelling left residual
+   *destabilizing* gravity that softened the spring amplitude-dependently.
+   Full cancellation makes **period amplitude-independent** (verified A=5–12°).
+4. omega0 then sets the period linearly; omega0=4.305 nails 1.000 s.
+
+Key facts (don't re-derive):
+- Period is amplitude-independent → amplitude is a FREE knob for the torque
+  (secondary) objective. Torque ≈ proportional to amplitude.
+- Torque is dominated by gravity feedforward; gravity-fight and restoring have
+  the SAME sign (inverted pendulum) so they add — no cancellation trick exists.
+  Min torque = min visible amplitude. Floor set by the 2° die-out gate +
+  "must look like a clock" (kept ~7° as a clear, robust swing).
+- Limit cycle is globally attracting: self-starts to the same cycle from any IC
+  (0.5–15°, even upright+kick). A genuine autonomous clock.
+- The cube oscillates about UPRIGHT (inverted-pendulum balance point).
+
+Dead ends / non-levers: chasing omega0 past ~4 decimals = overfitting the
+period estimator's numerical floor (no physical meaning). use_sin_restoring
+unused (linear is clean and amplitude-independent once gravity is cancelled).
+
+Gotcha: rapid same-second edits can reuse stale .pyc → eval.sh sets
+PYTHONDONTWRITEBYTECODE/-B. Always trust eval.sh, not hand sweeps.
