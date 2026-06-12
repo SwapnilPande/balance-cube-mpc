@@ -147,10 +147,10 @@ class BangBangGains:
 # Default bang-bang gains (tuned by the Onyx loop for ~1.0 s, ~7 deg).
 DEFAULT_BANGBANG = BangBangGains(
     amplitude_rad=math.radians(7.0),
-    tau_burst=0.06,
-    inner_frac=0.5,
+    tau_burst=0.015,
+    inner_frac=0.6,
     w_ref=2.0 * math.pi,
-    k_damp=0.05,
+    k_damp=0.15,
     gravity_scale=1.25,
 )
 
@@ -193,9 +193,12 @@ class BangBangMetronome:
 
         tau = g.gravity_scale * self._mgL * math.sin(theta)  # glide assist
         energy = theta * theta + (theta_dot / g.w_ref) ** 2
-        tau -= g.k_damp * (energy - A * A) * theta_dot       # amplitude regulation
+        # Restoring acts through the plant's -tau term, so a torque that pulls
+        # theta back toward 0 must be POSITIVE for theta > 0 (same sign as the
+        # FL controller's restoring). Likewise amplitude damping adds +k*err*thd.
+        tau += g.k_damp * (energy - A * A) * theta_dot       # amplitude regulation
         if abs(theta) > g.inner_frac * A:
-            tau -= math.copysign(g.tau_burst, theta)         # outer-zone centering burst
+            tau += math.copysign(g.tau_burst, theta)         # outer-zone centering burst
 
         if tau > g.max_torque:
             tau = g.max_torque
@@ -206,7 +209,7 @@ class BangBangMetronome:
 
 # --- Strategy selection -------------------------------------------------------
 # The Onyx loop swaps strategies here; the eval calls build_metronome(hw).
-STRATEGY = "fl"   # "fl" (feedback-linearized) | "bangbang" (model-light relay)
+STRATEGY = "bangbang"   # "fl" (feedback-linearized) | "bangbang" (model-light relay)
 
 
 def build_metronome(hw: HardwareConfig):
