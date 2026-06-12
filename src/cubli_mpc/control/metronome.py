@@ -53,6 +53,13 @@ class MetronomeGains:
     mu: float              # limit-cycle convergence rate (energy feedback)
     use_sin_restoring: bool = False  # sin(theta) (pendulum-like) vs linear
     max_torque: float = 0.20         # Nm hard saturation
+    # Hardening (superlinear) restoring: r(theta) = theta*(1 + hardening*(theta/A)^2).
+    # 0 = linear spring -> pure sine motion. >0 stiffens near the extremes, so
+    # the cube coasts fast through the middle and snaps around at the turns: an
+    # "organic" coast-and-burst profile with a higher peak/RMS ratio (crest
+    # factor). Re-lock omega0 after changing this (the spring gets stiffer on
+    # average so the period shortens).
+    hardening: float = 0.0
     # Effective tilt inertia used in the inversion, as a multiple of the
     # cube-only I_b. MuJoCo's true tilt inertia + wheel-torque coupling make
     # the realized tau->theta_ddot gain softer than 1/I_b; getting this right
@@ -103,7 +110,11 @@ class MetronomeController:
         omega_w = float(x_hat[3])
 
         w0 = g.omega0
-        restoring = math.sin(theta) if g.use_sin_restoring else theta
+        if g.use_sin_restoring:
+            restoring = math.sin(theta)
+        else:
+            A = g.amplitude_rad
+            restoring = theta * (1.0 + g.hardening * (theta / A) ** 2)
         energy = theta * theta + (theta_dot / w0) ** 2
         theta_ddot_des = (-w0 * w0 * restoring
                           - g.mu * (energy - g.amplitude_rad ** 2) * theta_dot)
@@ -118,3 +129,86 @@ class MetronomeController:
         elif tau < -g.max_torque:
             tau = -g.max_torque
         return tau
+
+
+@dataclass(frozen=True)
+class BangBangGains:
+    """Gains for the model-light relay metronome (BangBangMetronome)."""
+    amplitude_rad: float          # target swing amplitude
+    tau_burst: float              # Nm, fixed magnitude of the outer-zone burst
+    inner_frac: float = 0.5       # coast inside |theta| < inner_frac*A
+    w_ref: float = 2.0 * math.pi  # rad/s, only for the energy/amplitude measure
+    k_damp: float = 0.05          # amplitude-regulation (energy feedback) gain
+    gravity_scale: float = 1.25   # glide-assist gravity feedforward scale
+    max_torque: float = 0.20
+
+
+# Default bang-bang gains (tuned by the Onyx loop for ~1.0 s, ~7 deg).
+DEFAULT_BANGBANG = BangBangGains(
+    amplitude_rad=math.radians(7.0),
+    tau_burst=0.06,
+    inner_frac=0.5,
+    w_ref=2.0 * math.pi,
+    k_damp=0.05,
+    gravity_scale=1.25,
+)
+
+
+class BangBangMetronome:
+    """Model-LIGHT relay metronome: coast through the middle, burst at the ends.
+
+    Contrast with the feedback-linearized MetronomeController, which derives
+    every torque value from the inertia/gravity model. This controller uses
+    only:
+      - a (scalable) gravity feedforward to glide, and
+      - a FIXED-magnitude centering burst once the cube is in the outer zone
+        (|theta| > inner_frac*A), plus a small energy-feedback term that
+        regulates amplitude.
+
+    Because the burst magnitude is not derived from inertia, the period is set
+    by the relay dynamics (tuned, not computed) and the controller is far less
+    sensitive to inertia mismatch. The commanded torque is either ~0 (coast) or
+    a large burst (reversal) and almost never lingers at small values, so it is
+    naturally robust to motor stiction / a torque deadband. Trade-off: torque
+    is "blockier" (low crest factor) and the period is harder to pin exactly.
+    """
+
+    def __init__(self, hw: HardwareConfig, gains: BangBangGains = DEFAULT_BANGBANG):
+        self._g = gains
+        self._mgL = hw.gravity_moment_coefficient
+
+    @property
+    def amplitude(self) -> float:
+        return self._g.amplitude_rad
+
+    def reset(self) -> None:
+        pass
+
+    def step(self, x_hat: np.ndarray, t: float) -> float:
+        g = self._g
+        theta = float(x_hat[0])
+        theta_dot = float(x_hat[1])
+        A = g.amplitude_rad
+
+        tau = g.gravity_scale * self._mgL * math.sin(theta)  # glide assist
+        energy = theta * theta + (theta_dot / g.w_ref) ** 2
+        tau -= g.k_damp * (energy - A * A) * theta_dot       # amplitude regulation
+        if abs(theta) > g.inner_frac * A:
+            tau -= math.copysign(g.tau_burst, theta)         # outer-zone centering burst
+
+        if tau > g.max_torque:
+            tau = g.max_torque
+        elif tau < -g.max_torque:
+            tau = -g.max_torque
+        return tau
+
+
+# --- Strategy selection -------------------------------------------------------
+# The Onyx loop swaps strategies here; the eval calls build_metronome(hw).
+STRATEGY = "fl"   # "fl" (feedback-linearized) | "bangbang" (model-light relay)
+
+
+def build_metronome(hw: HardwareConfig):
+    if STRATEGY == "bangbang":
+        return BangBangMetronome(hw, DEFAULT_BANGBANG)
+    return MetronomeController(hw, DEFAULT_GAINS)
