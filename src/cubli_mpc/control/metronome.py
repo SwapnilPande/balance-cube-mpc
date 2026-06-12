@@ -217,7 +217,7 @@ class BangBangMetronome:
 #   "nmpc"     — NMPC tracking the offline min-effort swing plan (optimization-
 #                based; exact time-indexed period). Heavy (IPOPT/tick), so it is
 #                NOT used in the hot eval.sh loop — only the comparison/eval-nmpc.
-STRATEGY = "fl"
+STRATEGY = "nmpc"
 
 # Period/amplitude of the metronome (shared so all strategies match).
 METRONOME_PERIOD_S = 1.0
