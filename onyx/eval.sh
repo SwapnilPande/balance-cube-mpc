@@ -4,7 +4,12 @@ set -euo pipefail
 # Fast (~1-2s): tiny MuJoCo model, no rendering, no plotting.
 cd "$(dirname "$0")/.."
 
-# Fast syntax pre-check (<1s) before the sim.
-uv run python -c "import ast,sys; ast.parse(open('src/cubli_mpc/control/metronome.py').read())"
+# Never use cached bytecode: rapid edits within the same wall-clock second
+# can make Python reuse a stale .pyc (mtime check is second-granularity),
+# silently evaluating the OLD gains. -B + DONTWRITEBYTECODE forces source reads.
+export PYTHONDONTWRITEBYTECODE=1
 
-uv run python onyx/eval_metronome.py
+# Fast syntax pre-check (<1s) before the sim.
+uv run python -B -c "import ast,sys; ast.parse(open('src/cubli_mpc/control/metronome.py').read())"
+
+uv run python -B onyx/eval_metronome.py

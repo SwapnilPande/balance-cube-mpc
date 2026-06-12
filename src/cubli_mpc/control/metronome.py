@@ -53,16 +53,30 @@ class MetronomeGains:
     mu: float              # limit-cycle convergence rate (energy feedback)
     use_sin_restoring: bool = False  # sin(theta) (pendulum-like) vs linear
     max_torque: float = 0.20         # Nm hard saturation
+    # Effective tilt inertia used in the inversion, as a multiple of the
+    # cube-only I_b. MuJoCo's true tilt inertia + wheel-torque coupling make
+    # the realized tau->theta_ddot gain softer than 1/I_b; getting this right
+    # makes omega0 map 1:1 to realized frequency and lets the energy regulator
+    # hold amplitude.
+    inertia_scale: float = 1.0
+    # Scale on the gravity feedforward. The config's mgL counts only the cube
+    # mass; MuJoCo's true gravity moment also includes the wheel (~1.25x).
+    # Under-cancelling leaves residual destabilizing gravity that softens the
+    # oscillator amplitude-dependently, so dialing this in decouples period
+    # from amplitude.
+    gravity_scale: float = 1.0
 
 
 # --- Tunable defaults (the Onyx loop edits these) -----------------------------
 # omega0 = 2*pi / T_target with T_target = 1.0 s as the starting guess.
 DEFAULT_GAINS = MetronomeGains(
-    omega0=2.0 * math.pi / 1.0,
-    amplitude_rad=math.radians(15.0),
-    mu=8.0,
+    omega0=4.31,
+    amplitude_rad=math.radians(10.0),
+    mu=20.0,
     use_sin_restoring=False,
     max_torque=0.20,
+    inertia_scale=2.54,
+    gravity_scale=1.25,
 )
 
 
@@ -94,10 +108,10 @@ class MetronomeController:
         theta_ddot_des = (-w0 * w0 * restoring
                           - g.mu * (energy - g.amplitude_rad ** 2) * theta_dot)
 
-        tau = (self._mgL * math.sin(theta)
+        tau = (g.gravity_scale * self._mgL * math.sin(theta)
                - self._b_e * theta_dot
                + self._b_w * omega_w
-               - self._I_b * theta_ddot_des)
+               - g.inertia_scale * self._I_b * theta_ddot_des)
 
         if tau > g.max_torque:
             tau = g.max_torque
