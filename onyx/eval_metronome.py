@@ -72,6 +72,8 @@ class _DeadbandController:
 
 def simulate(plant_hw, controller, sim, stiction_nm=0.0):
     """Run one scenario; return (period_error, diagnostics dict)."""
+    if hasattr(controller, "reset"):
+        controller.reset()  # clear stateful controllers (e.g. NMPC warm-start)
     ctrl = _DeadbandController(controller, stiction_nm) if stiction_nm > 0 else controller
     env = CubliEnv(plant_hw, sim)
     env.reset(theta0=controller.amplitude, theta_dot0=0.0)

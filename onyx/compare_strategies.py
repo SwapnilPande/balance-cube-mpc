@@ -21,6 +21,7 @@ import numpy as np
 from cubli_mpc.config import load_config
 from cubli_mpc.control.metronome import (
     MetronomeController, MetronomeGains, BangBangMetronome, DEFAULT_BANGBANG,
+    build_nmpc_metronome,
 )
 from cubli_mpc.runner import Runner
 from cubli_mpc.sim.env import CubliEnv
@@ -38,6 +39,7 @@ STRATS = {
         omega0=2.841, amplitude_rad=math.radians(7.0), mu=20.0,
         inertia_scale=2.54, gravity_scale=1.25, hardening=3.0)),
     "bang-bang": BangBangMetronome(hw, DEFAULT_BANGBANG),
+    "NMPC (track plan)": build_nmpc_metronome(hw),
 }
 
 

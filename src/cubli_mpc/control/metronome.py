@@ -212,10 +212,56 @@ class BangBangMetronome:
 
 # --- Strategy selection -------------------------------------------------------
 # The Onyx loop swaps strategies here; the eval calls build_metronome(hw).
-STRATEGY = "fl"   # "fl" (feedback-linearized) | "bangbang" (model-light relay)
+#   "fl"       — feedback-linearized hardening limit cycle (organic, default).
+#   "bangbang" — model-light relay (dominated; kept for contrast).
+#   "nmpc"     — NMPC tracking the offline min-effort swing plan (optimization-
+#                based; exact time-indexed period). Heavy (IPOPT/tick), so it is
+#                NOT used in the hot eval.sh loop — only the comparison/eval-nmpc.
+STRATEGY = "fl"
+
+# Period/amplitude of the metronome (shared so all strategies match).
+METRONOME_PERIOD_S = 1.0
+METRONOME_AMP_RAD = math.radians(7.0)
+
+
+def build_nmpc_metronome(hw: HardwareConfig, horizon_steps: int = 30):
+    """NMPC tracking the offline min-effort swing trajectory.
+
+    Plans (and caches) the periodic min-effort swing once, loads it as a
+    looping reference, and returns an NMPCController with a nonlinear-PD
+    fallback. The realized period is set by the time-indexed reference, so it
+    keeps wall-clock time even under plant mismatch. Lazy imports keep CasADi/
+    IPOPT out of the import path for the lightweight controllers.
+    """
+    from pathlib import Path
+
+    from cubli_mpc.control.nmpc import NMPCController, NMPCConfig
+    from cubli_mpc.control.nonlinear_pd import (
+        NonlinearPDController, NonlinearPDGains,
+    )
+    from cubli_mpc.control.references import PeriodicTrajectoryReference
+    from cubli_mpc.control.swing_planner import SwingTrajConfig, plan_swing
+
+    deg = round(math.degrees(METRONOME_AMP_RAD), 1)
+    traj = Path("runs/metronome") / f"swing_{METRONOME_PERIOD_S:g}s_{deg:g}deg.npz"
+    if not traj.exists():
+        traj.parent.mkdir(parents=True, exist_ok=True)
+        plan_swing(hw, SwingTrajConfig(
+            period_s=METRONOME_PERIOD_S, theta_target_rad=METRONOME_AMP_RAD,
+            n_segments=200, smoothness_weight=1e-3, save_path=traj))
+    ref = PeriodicTrajectoryReference.from_file(traj)
+    pd = NonlinearPDController(NonlinearPDGains(
+        kp=0.5, kd=0.05, k_wheel=1e-4, max_balance_tilt=math.radians(2.0),
+        max_torque=hw.motor_max_torque_nm), hw)
+    ctrl = NMPCController(hw, NMPCConfig(horizon_steps=horizon_steps, dt=0.01),
+                          reference=ref, fallback_controller=pd)
+    ctrl.amplitude = METRONOME_AMP_RAD  # for IC seeding in the eval
+    return ctrl
 
 
 def build_metronome(hw: HardwareConfig):
     if STRATEGY == "bangbang":
         return BangBangMetronome(hw, DEFAULT_BANGBANG)
+    if STRATEGY == "nmpc":
+        return build_nmpc_metronome(hw)
     return MetronomeController(hw, DEFAULT_GAINS)
