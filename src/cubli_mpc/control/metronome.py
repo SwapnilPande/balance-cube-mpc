@@ -77,12 +77,13 @@ class MetronomeGains:
 # --- Tunable defaults (the Onyx loop edits these) -----------------------------
 # omega0 = 2*pi / T_target with T_target = 1.0 s as the starting guess.
 DEFAULT_GAINS = MetronomeGains(
-    omega0=4.305,
+    omega0=2.841,
     amplitude_rad=math.radians(7.0),
     mu=20.0,
     use_sin_restoring=False,
     max_torque=0.20,
     inertia_scale=2.54,
+    hardening=3.0,
     gravity_scale=1.25,
 )
 
