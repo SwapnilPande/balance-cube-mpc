@@ -15,22 +15,30 @@ period ≈ 2π/omega0; realized period drifts because the analytic inversion
 includes wheel mass + coupling). Closing that gap to land at exactly 1.0 s,
 cheaply, is the whole game.
 
+User wants the motion to feel **organic** (a lower-RMS, higher-peak "coast and
+burst" profile, not a clinical sine) and the strategies considered with an eye
+to **sim2real** (real motor stiction, plant-parameter mismatch). Explore
+multiple control strategies.
+
 ## Metrics
 
-- **Primary**: `period_error`, s, **minimize** — |mean realized full period − 1.0|.
-  When the run is invalid (cube fell past 45°, or oscillation died < 2° amp),
-  period_error is set to the penalty 1.0 s.
-- **Secondary** (tradeoff monitors, rarely override primary):
-  - `torque_rms`, Nm, minimize — control magnitude (the user's stated 2nd goal).
-  - `torque_max` / `torque_sat_frac` — saturation pressure (0.2 Nm cap).
-  - `omega_wheel_max`, rad/s — wheel must stay under motor_max_speed (600).
-  - `amplitude_deg`, `period_std` (jitter), `n_periods`, `sustained` (0/1).
+- **Primary**: `period_error`, s, **minimize** — |mean realized full period − 1.0|
+  (nominal plant, ideal motor). Invalid run (fell >45° / died <2°) → penalty 1.0 s.
+- **Secondary** (tradeoff monitors):
+  - `torque_rms`, Nm, minimize — control magnitude (user's 2nd goal).
+  - `crest_factor`, peak/RMS — "organic" burstiness (sine=1.41; higher=burstier).
+  - `torque_max`, Nm — must stay < 0.2 cap.
+  - `period_error_stiction`, s — robustness to a 0.015 Nm motor torque deadband.
+  - `period_error_mismatch`, s — robustness to a perturbed plant (cube +10%,
+    wheel +20% mass) with the controller on nominal params. **Sim2real proxy.**
+  - `omega_wheel_max` (<600), `amplitude_deg`, `period_std`, `sustained`.
 
 ## How to Run
 
-`./onyx/eval.sh` — runs `onyx/eval_metronome.py` (12 s sim, 4 s settle, measure
-period from upward zero-crossings of θ). Outputs `METRIC name=value` lines.
-~0.45 s/run.
+`./onyx/eval.sh` → `onyx/eval_metronome.py`. Runs 3 scenarios (nominal /
+stiction / mismatch) on whatever `build_metronome` returns. ~0.25 s/run.
+Helpers: `onyx/probe.py` (FL hardening sweep, auto-relocks ω0), `onyx/probe_bb.py`
+(bang-bang sweep), `onyx/compare_strategies.py` (waveform overlay + table).
 
 ## Files in Scope
 
@@ -86,9 +94,48 @@ Key facts (don't re-derive):
   (0.5–15°, even upright+kick). A genuine autonomous clock.
 - The cube oscillates about UPRIGHT (inverted-pendulum balance point).
 
+### Phase 2 — organic profile + multiple strategies + sim2real
+
+**Current default = FL organic, `hardening=3`, omega0=2.841.** Period 1.0000 s,
+torque_rms **0.0314** (−26% vs sine), crest **2.19**, mismatch robustness
+**0.131** (−55% vs sine).
+
+- **Hardening spring** `r(θ)=θ(1+h·(θ/A)²)` makes the coast-and-burst profile.
+  Re-lock ω0 (stiffer → faster). Sweeping h (ω0 re-locked to 1.0 s):
+  h: 0→2→3→5→8 gives RMS 0.043→0.033→0.031→0.029→0.027, crest 1.4→2.0→2.2→2.6→3.1.
+  Hardening LOWERS RMS *and* raises crest *and* improves mass-mismatch robustness
+  (the stiff spring dominates the restoring, so gravity-cancellation error
+  matters less). It WORSENS the command-deadband stiction metric (longer
+  near-zero coast gets eaten). h=3 chosen (organic, matches the min-effort
+  crest≈2.3 the user liked, mild stiction cost).
+
+Strategies compared (`onyx/compare_strategies.py`):
+- **FL sine** (h=0): RMS 0.043, crest 1.42, stiction 0.015, mismatch 0.29.
+- **FL organic** (h=3): RMS 0.031, crest 2.19, stiction 0.076, mismatch 0.13. ★
+- **bang-bang relay**: pe 0.015, RMS 0.041, crest 1.47, stiction 0.065,
+  mismatch **falls (1.0)**. DOMINATED — see below.
+
+Sim2real conclusions:
+- **Mass mismatch:** FL period is sensitive via the *gravity* cancellation (sine
+  drifts to 1.29 s under +10/20% mass). HARDENING fixes most of this.
+- **Friction mismatch:** FL TOPPLES at ≥2× bearing friction (not in the metric;
+  too harsh). Real fragility → a friction feedforward / integral term is the
+  sim2real to-do.
+- **Motor stiction:** for an *autonomous limit cycle* a torque deadband hurts
+  (loses small coast corrections). The reaction WHEEL spins continuously (±150
+  rad/s) so breakaway stiction is mild vs a direct-drive joint; torque
+  *resolution/quantization* is the real limit. The user's "bursts beat stiction"
+  intuition applies to *reference-tracking* control (needs precise small torques
+  through zero), a strategy not yet built — see `onyx.ideas.md`.
+- **bang-bang is ill-suited to a SLOW inverted metronome:** reaching 1.0 s forces
+  a weak burst (no authority margin → topples under mismatch); and an inverted
+  pendulum can't glide slowly at angle (it falls), so the strong-burst+long-coast
+  recipe that makes a relay robust is unreachable here. Bang-bang is also NOT
+  organic (square-ish → low crest).
+
 Dead ends / non-levers: chasing omega0 past ~4 decimals = overfitting the
-period estimator's numerical floor (no physical meaning). use_sin_restoring
-unused (linear is clean and amplitude-independent once gravity is cancelled).
+period estimator's numerical floor. use_sin_restoring unused. Pure bang-bang
+relay (dominated). 
 
 Gotcha: rapid same-second edits can reuse stale .pyc → eval.sh sets
 PYTHONDONTWRITEBYTECODE/-B. Always trust eval.sh, not hand sweeps.

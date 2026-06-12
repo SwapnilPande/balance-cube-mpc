@@ -166,12 +166,15 @@ class BangBangMetronome:
         (|theta| > inner_frac*A), plus a small energy-feedback term that
         regulates amplitude.
 
-    Because the burst magnitude is not derived from inertia, the period is set
-    by the relay dynamics (tuned, not computed) and the controller is far less
-    sensitive to inertia mismatch. The commanded torque is either ~0 (coast) or
-    a large burst (reversal) and almost never lingers at small values, so it is
-    naturally robust to motor stiction / a torque deadband. Trade-off: torque
-    is "blockier" (low crest factor) and the period is harder to pin exactly.
+    Intent was a stiction-/mismatch-robust strategy. EMPIRICALLY (see Onyx exp
+    `bangbang-1hz-dominated`) it is DOMINATED by FL-hardening for this slow
+    metronome: reaching the 1.0 s period forces a weak burst with no authority
+    margin, so it topples under mass mismatch, and its torque is blocky (crest
+    ~1.5, NOT organic) with higher RMS. The deeper reason is physical: an
+    *inverted* pendulum cannot glide slowly at a non-zero angle (it falls), so
+    the strong-burst + long-coast recipe that would make a relay robust is
+    unreachable at a slow period and a meaningful amplitude. Kept for the record
+    and as a contrast point; the FL hardening spring is the better fit.
     """
 
     def __init__(self, hw: HardwareConfig, gains: BangBangGains = DEFAULT_BANGBANG):
@@ -209,7 +212,7 @@ class BangBangMetronome:
 
 # --- Strategy selection -------------------------------------------------------
 # The Onyx loop swaps strategies here; the eval calls build_metronome(hw).
-STRATEGY = "bangbang"   # "fl" (feedback-linearized) | "bangbang" (model-light relay)
+STRATEGY = "fl"   # "fl" (feedback-linearized) | "bangbang" (model-light relay)
 
 
 def build_metronome(hw: HardwareConfig):
